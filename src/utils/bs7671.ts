@@ -205,7 +205,7 @@ const INSPECTION_INTERVALS: Record<string, { years: number; reference: string }>
 export function getInspectionInterval(
   premisesType: PremisesType
 ): { years: number; reference: string } {
-  return INSPECTION_INTERVALS[premisesType] ?? INSPECTION_INTERVALS.OTHER
+  return INSPECTION_INTERVALS[premisesType] ?? INSPECTION_INTERVALS['OTHER'] ?? { years: 5, reference: 'Per IET GN3 Table 3.2' }
 }
 
 /**
