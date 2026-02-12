@@ -33,13 +33,7 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: true,
     target: 'es2020',
-    minify: 'terser',
-    terserOptions: {
-      compress: {
-        drop_console: true,
-        drop_debugger: true,
-      },
-    },
+    minify: 'esbuild',
     rollupOptions: {
       output: {
         manualChunks: {
@@ -51,6 +45,10 @@ export default defineConfig({
       },
     },
     chunkSizeWarningLimit: 500,
+  },
+
+  esbuild: {
+    drop: ['console', 'debugger'],
   },
 
   // Environment variable prefix — only VITE_ prefixed vars exposed to client
