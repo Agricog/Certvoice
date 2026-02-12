@@ -28,11 +28,13 @@ interface GAEventParams {
 function trackEvent(eventName: string, params?: GAEventParams): void {
   try {
     if (typeof window !== 'undefined' && 'gtag' in window) {
-      const gtag = (window as unknown as Record<string, (...args: unknown[]) => void>).gtag
-      gtag('event', eventName, {
-        ...params,
-        timestamp: new Date().toISOString(),
-      })
+      const gtag = (window as unknown as Record<string, ((...args: unknown[]) => void) | undefined>).gtag
+      if (gtag) {
+        gtag('event', eventName, {
+          ...params,
+          timestamp: new Date().toISOString(),
+        })
+      }
     }
   } catch {
     // Silent fail — analytics should never break the app
