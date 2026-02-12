@@ -27,7 +27,6 @@ import {
 import VoiceCapture from './VoiceCapture'
 import { useAIExtraction } from '../hooks/useAIExtraction'
 import type { ExtractionContext } from '../hooks/useAIExtraction'
-import type { AIExtractionResponse } from '../types/api'
 import type { CircuitDetail, TestValue } from '../types/eicr'
 import { preprocessTranscript } from '../utils/speechParser'
 import { trackCircuitCaptured } from '../utils/analytics'
