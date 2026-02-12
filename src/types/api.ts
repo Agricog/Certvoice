@@ -12,7 +12,6 @@ import type {
   CircuitDetail,
   Observation,
   SupplyCharacteristics,
-  ClassificationCode,
   EICRCertificate,
   Job,
   EngineerProfile,
