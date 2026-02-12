@@ -1,0 +1,206 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   CertVoice Design System — CSS Variables
+   Matches POC colour scheme exactly
+   ============================================ */
+
+:root {
+  /* Colours */
+  --cv-bg: #0C0F14;
+  --cv-surface: #151920;
+  --cv-surface-2: #1C2029;
+  --cv-border: #2A2F3A;
+  --cv-text: #E8ECF1;
+  --cv-muted: #7A8494;
+  --cv-accent: #3B82F6;
+  --cv-accent-glow: rgba(59, 130, 246, 0.15);
+  --cv-green: #22C55E;
+  --cv-green-glow: rgba(34, 197, 94, 0.15);
+  --cv-amber: #F59E0B;
+  --cv-amber-glow: rgba(245, 158, 11, 0.15);
+  --cv-red: #EF4444;
+  --cv-red-glow: rgba(239, 68, 68, 0.15);
+
+  /* Spacing */
+  --cv-radius: 12px;
+
+  /* Typography */
+  --cv-font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --cv-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* ============================================
+   Base Layer Overrides
+   ============================================ */
+
+@layer base {
+  /* Smooth scrolling */
+  html {
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Body defaults */
+  body {
+    background-color: var(--cv-bg);
+    color: var(--cv-text);
+    font-family: var(--cv-font-sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Focus visible for keyboard navigation — accessibility */
+  *:focus-visible {
+    outline: 2px solid var(--cv-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Remove default focus for mouse users */
+  *:focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--cv-bg);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--cv-border);
+    border-radius: 2px;
+  }
+
+  /* Selection */
+  ::selection {
+    background-color: var(--cv-accent);
+    color: white;
+  }
+}
+
+/* ============================================
+   Component Layer — Reusable CertVoice Classes
+   ============================================ */
+
+@layer components {
+  /* Card / Panel */
+  .cv-panel {
+    @apply bg-certvoice-surface border border-certvoice-border rounded-xl p-4;
+  }
+
+  /* Section title */
+  .cv-section-title {
+    @apply text-xs font-semibold text-certvoice-muted uppercase tracking-wider;
+  }
+
+  /* Data field (extracted values) */
+  .cv-data-field {
+    @apply bg-certvoice-bg border border-certvoice-border rounded-lg px-3 py-2.5;
+  }
+
+  .cv-data-label {
+    @apply text-[10px] font-semibold text-certvoice-muted uppercase tracking-wide mb-1;
+  }
+
+  .cv-data-value {
+    @apply font-mono text-sm font-medium text-certvoice-text;
+  }
+
+  /* Status badges */
+  .cv-badge {
+    @apply text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase tracking-wide;
+  }
+
+  .cv-badge-pass {
+    @apply cv-badge bg-[rgba(34,197,94,0.15)] text-certvoice-green;
+  }
+
+  .cv-badge-fail {
+    @apply cv-badge bg-[rgba(239,68,68,0.15)] text-certvoice-red;
+  }
+
+  .cv-badge-warning {
+    @apply cv-badge bg-[rgba(245,158,11,0.15)] text-certvoice-amber;
+  }
+
+  /* Classification code badges */
+  .cv-code-c1 {
+    @apply bg-[rgba(239,68,68,0.15)] text-certvoice-red font-bold text-xs px-2.5 py-1 rounded-md;
+  }
+
+  .cv-code-c2 {
+    @apply bg-[rgba(245,158,11,0.15)] text-certvoice-amber font-bold text-xs px-2.5 py-1 rounded-md;
+  }
+
+  .cv-code-c3 {
+    @apply bg-[rgba(34,197,94,0.15)] text-certvoice-green font-bold text-xs px-2.5 py-1 rounded-md;
+  }
+
+  .cv-code-fi {
+    @apply bg-[rgba(59,130,246,0.15)] text-certvoice-accent font-bold text-xs px-2.5 py-1 rounded-md;
+  }
+
+  /* Chip / pill selector */
+  .cv-chip {
+    @apply px-3.5 py-1.5 rounded-full text-xs font-medium cursor-pointer 
+           border border-certvoice-border bg-certvoice-surface-2 text-certvoice-muted
+           transition-colors duration-200;
+  }
+
+  .cv-chip-active {
+    @apply cv-chip bg-[rgba(59,130,246,0.15)] border-certvoice-accent text-certvoice-accent;
+  }
+
+  /* Button base */
+  .cv-btn {
+    @apply px-4 py-2.5 rounded-xl font-semibold text-sm transition-all duration-200
+           focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-certvoice-accent
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .cv-btn-primary {
+    @apply cv-btn bg-certvoice-accent text-white hover:brightness-110 active:brightness-95;
+  }
+
+  .cv-btn-secondary {
+    @apply cv-btn bg-certvoice-surface-2 border border-certvoice-border text-certvoice-text
+           hover:border-certvoice-accent hover:text-certvoice-accent;
+  }
+
+  /* Offline indicator */
+  .cv-offline-banner {
+    @apply bg-certvoice-amber text-black text-xs font-semibold text-center py-1.5 px-4;
+  }
+}
+
+/* ============================================
+   Utility Layer
+   ============================================ */
+
+@layer utilities {
+  /* Glow effects for voice button states */
+  .glow-accent {
+    box-shadow: 0 0 30px var(--cv-accent-glow);
+  }
+
+  .glow-red {
+    box-shadow: 0 0 30px var(--cv-red-glow);
+  }
+
+  .glow-amber {
+    box-shadow: 0 0 30px var(--cv-amber-glow);
+  }
+
+  .glow-green {
+    box-shadow: 0 0 30px var(--cv-green-glow);
+  }
+}
