@@ -18,16 +18,16 @@ import DOMPurify from 'dompurify'
 // ============================================================
 
 /** Strict config — strips ALL HTML. Use for form inputs. */
-const STRICT_CONFIG: DOMPurify.Config = {
-  ALLOWED_TAGS: [],
-  ALLOWED_ATTR: [],
+const STRICT_CONFIG = {
+  ALLOWED_TAGS: [] as string[],
+  ALLOWED_ATTR: [] as string[],
   KEEP_CONTENT: true,
 }
 
 /** Minimal HTML config — allows basic formatting. Use for observation text. */
-const MINIMAL_HTML_CONFIG: DOMPurify.Config = {
+const MINIMAL_HTML_CONFIG = {
   ALLOWED_TAGS: ['b', 'i', 'em', 'strong', 'br'],
-  ALLOWED_ATTR: [],
+  ALLOWED_ATTR: [] as string[],
   KEEP_CONTENT: true,
 }
 
@@ -44,7 +44,7 @@ const MINIMAL_HTML_CONFIG: DOMPurify.Config = {
  */
 export function sanitizeText(input: string): string {
   if (!input) return ''
-  return DOMPurify.sanitize(input.trim(), STRICT_CONFIG)
+  return String(DOMPurify.sanitize(input.trim(), STRICT_CONFIG))
 }
 
 /**
@@ -56,7 +56,7 @@ export function sanitizeText(input: string): string {
  */
 export function sanitizeObservationText(input: string): string {
   if (!input) return ''
-  return DOMPurify.sanitize(input.trim(), MINIMAL_HTML_CONFIG)
+  return String(DOMPurify.sanitize(input.trim(), MINIMAL_HTML_CONFIG))
 }
 
 /**
@@ -119,7 +119,7 @@ export function sanitizeTranscript(transcript: string): string {
   if (!transcript) return ''
 
   // Strip HTML
-  let clean = DOMPurify.sanitize(transcript.trim(), STRICT_CONFIG)
+  let clean = String(DOMPurify.sanitize(transcript.trim(), STRICT_CONFIG))
 
   // Normalise whitespace (voice transcripts can have irregular spacing)
   clean = clean.replace(/\s+/g, ' ')
