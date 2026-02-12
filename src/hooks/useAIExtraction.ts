@@ -23,7 +23,6 @@ import type {
   AIExtractionRequest,
   AIExtractionResponse,
   AIExtractionError,
-  ExtractionType,
 } from '../types/api'
 import { getCsrfToken } from '../utils/csrf'
 import { preprocessTranscript } from '../utils/speechParser'
@@ -192,8 +191,7 @@ export function useAIExtraction(): UseAIExtractionReturn {
 
           captureAIError(
             new Error(`AI extraction HTTP ${response.status}`),
-            'useAIExtraction.extract',
-            trimmed.length
+            { transcriptLength: trimmed.length, extractionType: 'unknown' }
           )
 
           return null
@@ -236,7 +234,7 @@ export function useAIExtraction(): UseAIExtractionReturn {
         setError(message)
         setStatus('error')
 
-        captureAIError(err, 'useAIExtraction.extract', trimmed.length)
+        captureAIError(err, { transcriptLength: trimmed.length, extractionType: 'unknown' })
         trackAIExtractionError('unknown', 'API_ERROR')
 
         return null
