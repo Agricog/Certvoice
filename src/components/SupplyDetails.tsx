@@ -376,7 +376,7 @@ export default function SupplyDetails({
     supply.ipf,
     supply.ze,
     supply.supplyDeviceRating,
-  ].filter((v) => v !== undefined && v !== '' && v !== null).length
+  ].filter((v) => v !== undefined && v !== null).length
 
   // ─── Render ─────────────────────────────────────────────────────────────
   return (
