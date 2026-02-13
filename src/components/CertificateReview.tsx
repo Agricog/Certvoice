@@ -68,16 +68,6 @@ interface ValidationResult {
   overallErrors: string[]
 }
 
-const DEFAULT_SECTION_STATUS: SectionStatus = {
-  isComplete: false,
-  hasWarnings: false,
-  hasErrors: false,
-  completedFields: 0,
-  totalFields: 1,
-  warnings: [],
-  errors: [],
-}
-
 // ============================================================
 // VALIDATION HELPERS
 // ============================================================
