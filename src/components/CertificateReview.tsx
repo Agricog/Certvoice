@@ -21,18 +21,9 @@ import {
   Plug,
   Clipboard,
   Eye,
-  Zap,
   Cable,
 } from 'lucide-react'
-import type {
-  EICRCertificate,
-  Observation,
-  CircuitDetail,
-  DistributionBoardHeader,
-  InspectionItem,
-  ClassificationCode,
-  InspectionOutcome,
-} from '../types/eicr'
+import type { EICRCertificate } from '../types/eicr'
 import { captureError } from '../utils/errorTracking'
 import { trackCertificateCompleted } from '../utils/analytics'
 
@@ -59,9 +50,32 @@ interface SectionStatus {
 interface ValidationResult {
   isValid: boolean
   canGenerate: boolean
-  sections: Record<string, SectionStatus>
+  sections: {
+    A: SectionStatus
+    B: SectionStatus
+    C: SectionStatus
+    D: SectionStatus
+    E: SectionStatus
+    F: SectionStatus
+    G: SectionStatus
+    I: SectionStatus
+    J: SectionStatus
+    K: SectionStatus
+    circuits: SectionStatus
+    schedule: SectionStatus
+  }
   overallWarnings: string[]
   overallErrors: string[]
+}
+
+const DEFAULT_SECTION_STATUS: SectionStatus = {
+  isComplete: false,
+  hasWarnings: false,
+  hasErrors: false,
+  completedFields: 0,
+  totalFields: 1,
+  warnings: [],
+  errors: [],
 }
 
 // ============================================================
@@ -69,7 +83,6 @@ interface ValidationResult {
 // ============================================================
 
 function validateCertificate(cert: EICRCertificate): ValidationResult {
-  const sections: Record<string, SectionStatus> = {}
   const overallWarnings: string[] = []
   const overallErrors: string[] = []
 
@@ -90,7 +103,6 @@ function validateCertificate(cert: EICRCertificate): ValidationResult {
     sectionA.errors.push('Client details incomplete')
     sectionA.hasErrors = true
   }
-  sections['A'] = sectionA
 
   // Section B: Reason for Report
   const sectionB: SectionStatus = {
@@ -109,7 +121,6 @@ function validateCertificate(cert: EICRCertificate): ValidationResult {
     sectionB.errors.push('Report reason incomplete')
     sectionB.hasErrors = true
   }
-  sections['B'] = sectionB
 
   // Section C: Installation Details
   const sectionC: SectionStatus = {
@@ -130,7 +141,6 @@ function validateCertificate(cert: EICRCertificate): ValidationResult {
     sectionC.errors.push('Installation address required')
     sectionC.hasErrors = true
   }
-  sections['C'] = sectionC
 
   // Section D: Extent and Limitations
   const sectionD: SectionStatus = {
@@ -150,7 +160,6 @@ function validateCertificate(cert: EICRCertificate): ValidationResult {
     sectionD.warnings.push('Extent covered not specified')
     sectionD.hasWarnings = true
   }
-  sections['D'] = sectionD
 
   // Section E: Summary (auto-calculated)
   const sectionE: SectionStatus = {
@@ -162,7 +171,6 @@ function validateCertificate(cert: EICRCertificate): ValidationResult {
     warnings: [],
     errors: [],
   }
-  sections['E'] = sectionE
 
   // Section F: Recommendations
   const sectionF: SectionStatus = {
@@ -177,7 +185,6 @@ function validateCertificate(cert: EICRCertificate): ValidationResult {
   if (cert.recommendations.nextInspectionDate) sectionF.completedFields++
   if (cert.recommendations.reasonForInterval) sectionF.completedFields++
   sectionF.isComplete = sectionF.completedFields >= 1
-  sections['F'] = sectionF
 
   // Section G: Declaration
   const sectionG: SectionStatus = {
@@ -199,7 +206,6 @@ function validateCertificate(cert: EICRCertificate): ValidationResult {
     sectionG.warnings.push('Inspector signature required')
     sectionG.hasWarnings = true
   }
-  sections['G'] = sectionG
 
   // Section I: Supply Characteristics
   const sectionI: SectionStatus = {
@@ -226,7 +232,6 @@ function validateCertificate(cert: EICRCertificate): ValidationResult {
     sectionI.warnings.push(`Ze of ${cert.supplyCharacteristics.ze}Ω is high`)
     sectionI.hasWarnings = true
   }
-  sections['I'] = sectionI
 
   // Section J: Installation Particulars
   const sectionJ: SectionStatus = {
@@ -245,7 +250,6 @@ function validateCertificate(cert: EICRCertificate): ValidationResult {
   if (cert.installationParticulars.bondingConductorCsa) sectionJ.completedFields++
   if (cert.installationParticulars.bondingConductorVerified) sectionJ.completedFields++
   sectionJ.isComplete = sectionJ.completedFields >= 4
-  sections['J'] = sectionJ
 
   // Section K: Observations
   const sectionK: SectionStatus = {
@@ -274,7 +278,6 @@ function validateCertificate(cert: EICRCertificate): ValidationResult {
     sectionK.warnings.push(`${fiCount} FI (Further Investigation) observation(s)`)
     sectionK.hasWarnings = true
   }
-  sections['K'] = sectionK
 
   // Circuits
   const circuitsStatus: SectionStatus = {
@@ -295,7 +298,6 @@ function validateCertificate(cert: EICRCertificate): ValidationResult {
     circuitsStatus.warnings.push(`${incompleteCircuits} circuit(s) incomplete`)
     circuitsStatus.hasWarnings = true
   }
-  sections['circuits'] = circuitsStatus
 
   // Inspection Schedule
   const scheduleStatus: SectionStatus = {
@@ -303,17 +305,16 @@ function validateCertificate(cert: EICRCertificate): ValidationResult {
     hasWarnings: false,
     hasErrors: false,
     completedFields: cert.inspectionSchedule.filter((i) => i.outcome !== null).length,
-    totalFields: cert.inspectionSchedule.length,
+    totalFields: cert.inspectionSchedule.length || 1,
     warnings: [],
     errors: [],
   }
   scheduleStatus.isComplete = scheduleStatus.completedFields === scheduleStatus.totalFields
-  if (scheduleStatus.completedFields < scheduleStatus.totalFields) {
+  if (cert.inspectionSchedule.length > 0 && scheduleStatus.completedFields < scheduleStatus.totalFields) {
     const remaining = scheduleStatus.totalFields - scheduleStatus.completedFields
     scheduleStatus.warnings.push(`${remaining} inspection item(s) not completed`)
     scheduleStatus.hasWarnings = true
   }
-  sections['schedule'] = scheduleStatus
 
   // Determine if PDF can be generated
   const hasBlockingErrors = 
@@ -328,7 +329,20 @@ function validateCertificate(cert: EICRCertificate): ValidationResult {
   return {
     isValid,
     canGenerate,
-    sections,
+    sections: {
+      A: sectionA,
+      B: sectionB,
+      C: sectionC,
+      D: sectionD,
+      E: sectionE,
+      F: sectionF,
+      G: sectionG,
+      I: sectionI,
+      J: sectionJ,
+      K: sectionK,
+      circuits: circuitsStatus,
+      schedule: scheduleStatus,
+    },
     overallWarnings,
     overallErrors,
   }
