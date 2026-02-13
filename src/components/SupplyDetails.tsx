@@ -1,3 +1,13 @@
+/**
+ * CertVoice — SupplyDetails Component
+ *
+ * Sections I & J of the EICR:
+ *   - Section I: Supply Characteristics & Earthing Arrangements
+ *   - Section J: Installation Particulars
+ *
+ * Voice capture enabled for supply parameters.
+ */
+
 import { useState, useCallback } from 'react'
 import {
   Zap,
@@ -13,12 +23,16 @@ import type {
   SupplyCharacteristics,
   InstallationParticulars,
   EarthingType,
+  ConductorConfig,
+  ConductorMaterial,
+  RCDType,
+  BondingStatus,
 } from '../types/eicr'
 import { sanitizeText } from '../utils/sanitization'
 import { captureError } from '../utils/errorTracking'
-import { trackEvent } from '../utils/analytics'
+import { trackFeatureUsed } from '../utils/analytics'
 import VoiceCapture from './VoiceCapture'
-import { useAIExtraction } from '../hooks/useAIExtraction'
+import { useAIExtraction, type ExtractionContext } from '../hooks/useAIExtraction'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 interface SupplyDetailsProps {
@@ -27,15 +41,6 @@ interface SupplyDetailsProps {
   onSupplyChange: (supply: SupplyCharacteristics) => void
   onParticularsChange: (particulars: InstallationParticulars) => void
 }
-
-type BondingTarget =
-  | 'waterPipes'
-  | 'gasPipes'
-  | 'oilPipes'
-  | 'structuralSteel'
-  | 'lightningProtection'
-
-type TickState = 'yes' | 'no' | 'na'
 
 interface SectionState {
   sectionI: boolean
@@ -48,23 +53,31 @@ interface SectionState {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const EARTHING_TYPES: { value: EarthingType; label: string }[] = [
-  { value: 'TN-C', label: 'TN-C' },
-  { value: 'TN-S', label: 'TN-S' },
-  { value: 'TN-C-S', label: 'TN-C-S' },
+  { value: 'TN_C', label: 'TN-C' },
+  { value: 'TN_S', label: 'TN-S' },
+  { value: 'TN_C_S', label: 'TN-C-S' },
   { value: 'TT', label: 'TT' },
   { value: 'IT', label: 'IT' },
 ]
 
-const CONDUCTOR_CONFIGS = [
-  '1-phase 2-wire',
-  '2-phase 3-wire',
-  '3-phase 3-wire',
-  '3-phase 4-wire',
-] as const
+const CONDUCTOR_CONFIGS: { value: ConductorConfig; label: string }[] = [
+  { value: '1PH_2WIRE', label: '1-phase 2-wire' },
+  { value: '2PH_3WIRE', label: '2-phase 3-wire' },
+  { value: '3PH_3WIRE', label: '3-phase 3-wire' },
+  { value: '3PH_4WIRE', label: '3-phase 4-wire' },
+]
 
-const RCD_TYPES = ['A', 'AC', 'B', 'F', 'S'] as const
+const RCD_TYPES: RCDType[] = ['A', 'AC', 'B', 'F', 'S']
 
-const CONDUCTOR_MATERIALS = ['Copper', 'Aluminium'] as const
+const CONDUCTOR_MATERIALS: { value: ConductorMaterial; label: string }[] = [
+  { value: 'COPPER', label: 'Copper' },
+  { value: 'ALUMINIUM', label: 'Aluminium' },
+]
+
+const BONDING_OPTIONS: { value: BondingStatus; label: string }[] = [
+  { value: 'SATISFACTORY', label: '✓' },
+  { value: 'NA', label: 'N/A' },
+]
 
 // ─── Component ──────────────────────────────────────────────────────────────
 export default function SupplyDetails({
@@ -73,7 +86,8 @@ export default function SupplyDetails({
   onSupplyChange,
   onParticularsChange,
 }: SupplyDetailsProps) {
-  const { extract, isExtracting } = useAIExtraction()
+  const { extract, status } = useAIExtraction()
+  const isExtracting = status === 'extracting'
 
   const [expanded, setExpanded] = useState<SectionState>({
     sectionI: true,
@@ -85,47 +99,89 @@ export default function SupplyDetails({
   })
 
   // ─── Voice Transcript Handler ───────────────────────────────────────────
-  const handleVoiceResult = useCallback(
-    async (transcript: string) => {
+  const handleVoiceTranscript = useCallback(
+    async (transcript: string, _durationMs: number) => {
       try {
-        const result = await extract(transcript, 'supply')
-        if (!result || result.type !== 'supply') return
+        const context: ExtractionContext = {
+          locationContext: 'Supply intake',
+          dbContext: '',
+          existingCircuits: [],
+          earthingType: supply.earthingType,
+        }
 
-        const data = result.data as Record<string, unknown>
+        const result = await extract(transcript, context)
+        if (!result || result.type !== 'supply' || !result.supply) return
 
-        // Map extracted supply fields
+        const data = result.supply
+
+        // Map extracted supply fields to SupplyCharacteristics
         const supplyUpdates: Partial<SupplyCharacteristics> = {}
-        if (data.earthing) supplyUpdates.earthingType = data.earthing as EarthingType
-        if (data.supply_type) supplyUpdates.supplyType = data.supply_type === 'AC' ? 'AC' : 'DC'
-        if (data.conductor_config) supplyUpdates.conductorConfig = sanitizeText(String(data.conductor_config))
-        if (data.voltage) supplyUpdates.nominalVoltage = Number(data.voltage)
-        if (data.frequency) supplyUpdates.nominalFrequency = Number(data.frequency)
-        if (data.ipf) supplyUpdates.prospectiveFaultCurrent = Number(data.ipf)
-        if (data.ze) supplyUpdates.externalEarthFaultLoop = Number(data.ze)
-        if (data.supply_fuse_bs) supplyUpdates.supplyProtectiveDeviceBS = sanitizeText(String(data.supply_fuse_bs))
-        if (data.supply_fuse_type) supplyUpdates.supplyProtectiveDeviceType = sanitizeText(String(data.supply_fuse_type))
-        if (data.supply_fuse_rating) supplyUpdates.supplyProtectiveDeviceRating = Number(data.supply_fuse_rating)
 
-        onSupplyChange({ ...supply, ...supplyUpdates })
+        // Type-safe field mapping
+        if ('earthingType' in data && data.earthingType) {
+          supplyUpdates.earthingType = data.earthingType as EarthingType
+        }
+        if ('supplyType' in data && data.supplyType) {
+          supplyUpdates.supplyType = data.supplyType === 'AC' ? 'AC' : 'DC'
+        }
+        if ('conductorConfig' in data && data.conductorConfig) {
+          supplyUpdates.conductorConfig = data.conductorConfig as ConductorConfig
+        }
+        if ('nominalVoltage' in data && data.nominalVoltage !== undefined) {
+          supplyUpdates.nominalVoltage = Number(data.nominalVoltage)
+        }
+        if ('nominalFrequency' in data && data.nominalFrequency !== undefined) {
+          supplyUpdates.nominalFrequency = Number(data.nominalFrequency)
+        }
+        if ('ipf' in data && data.ipf !== undefined) {
+          supplyUpdates.ipf = Number(data.ipf)
+        }
+        if ('ze' in data && data.ze !== undefined) {
+          supplyUpdates.ze = Number(data.ze)
+        }
+        if ('supplyDeviceBsEn' in data && data.supplyDeviceBsEn) {
+          supplyUpdates.supplyDeviceBsEn = sanitizeText(String(data.supplyDeviceBsEn))
+        }
+        if ('supplyDeviceType' in data && data.supplyDeviceType) {
+          supplyUpdates.supplyDeviceType = sanitizeText(String(data.supplyDeviceType))
+        }
+        if ('supplyDeviceRating' in data && data.supplyDeviceRating !== undefined) {
+          supplyUpdates.supplyDeviceRating = Number(data.supplyDeviceRating)
+        }
 
-        // Map extracted particulars fields
+        if (Object.keys(supplyUpdates).length > 0) {
+          onSupplyChange({ ...supply, ...supplyUpdates })
+        }
+
+        // Map extracted particulars fields to InstallationParticulars
         const partUpdates: Partial<InstallationParticulars> = {}
-        if (data.main_switch_location) partUpdates.mainSwitchLocation = sanitizeText(String(data.main_switch_location))
-        if (data.main_switch_bs) partUpdates.mainSwitchBS = sanitizeText(String(data.main_switch_bs))
-        if (data.main_switch_poles) partUpdates.mainSwitchPoles = Number(data.main_switch_poles)
-        if (data.main_switch_current) partUpdates.mainSwitchCurrentRating = Number(data.main_switch_current)
-        if (data.earthing_conductor_csa) partUpdates.earthingConductorCSA = Number(data.earthing_conductor_csa)
-        if (data.bonding_conductor_csa) partUpdates.bondingConductorCSA = Number(data.bonding_conductor_csa)
+
+        if ('mainSwitchLocation' in data && data.mainSwitchLocation) {
+          partUpdates.mainSwitchLocation = sanitizeText(String(data.mainSwitchLocation))
+        }
+        if ('mainSwitchBsEn' in data && data.mainSwitchBsEn) {
+          partUpdates.mainSwitchBsEn = sanitizeText(String(data.mainSwitchBsEn))
+        }
+        if ('mainSwitchPoles' in data && data.mainSwitchPoles !== undefined) {
+          partUpdates.mainSwitchPoles = Number(data.mainSwitchPoles)
+        }
+        if ('mainSwitchCurrentRating' in data && data.mainSwitchCurrentRating !== undefined) {
+          partUpdates.mainSwitchCurrentRating = Number(data.mainSwitchCurrentRating)
+        }
+        if ('earthingConductorCsa' in data && data.earthingConductorCsa !== undefined) {
+          partUpdates.earthingConductorCsa = Number(data.earthingConductorCsa)
+        }
+        if ('bondingConductorCsa' in data && data.bondingConductorCsa !== undefined) {
+          partUpdates.bondingConductorCsa = Number(data.bondingConductorCsa)
+        }
 
         if (Object.keys(partUpdates).length > 0) {
           onParticularsChange({ ...particulars, ...partUpdates })
         }
 
-        trackEvent('supply_voice_extraction', {
-          fields_extracted: Object.keys({ ...supplyUpdates, ...partUpdates }).length,
-        })
+        trackFeatureUsed('voice_capture')
       } catch (error) {
-        captureError(error, 'SupplyDetails.handleVoiceResult')
+        captureError(error, 'SupplyDetails.handleVoiceTranscript')
       }
     },
     [extract, supply, particulars, onSupplyChange, onParticularsChange]
@@ -155,17 +211,17 @@ export default function SupplyDetails({
     <button
       type="button"
       onClick={() => toggleSection(section)}
-      className="w-full flex items-center justify-between p-4 hover:bg-cv-surface-2/50 transition-colors rounded-lg"
+      className="w-full flex items-center justify-between p-4 hover:bg-certvoice-surface-2/50 transition-colors rounded-lg"
     >
       <div className="flex items-center gap-3">
-        <span className="text-cv-accent">{icon}</span>
+        <span className="text-certvoice-accent">{icon}</span>
         <span className="cv-section-title !mb-0">{title}</span>
         {filledCount !== undefined && totalCount !== undefined && (
           <span
             className={`text-xs font-mono px-2 py-0.5 rounded-full ${
               filledCount === totalCount
                 ? 'bg-emerald-500/15 text-emerald-400'
-                : 'bg-cv-accent/15 text-cv-accent'
+                : 'bg-certvoice-accent/15 text-certvoice-accent'
             }`}
           >
             {filledCount}/{totalCount}
@@ -173,17 +229,17 @@ export default function SupplyDetails({
         )}
       </div>
       {expanded[section] ? (
-        <ChevronUp className="w-4 h-4 text-cv-text-muted" />
+        <ChevronUp className="w-4 h-4 text-certvoice-muted" />
       ) : (
-        <ChevronDown className="w-4 h-4 text-cv-text-muted" />
+        <ChevronDown className="w-4 h-4 text-certvoice-muted" />
       )}
     </button>
   )
 
   const renderNumberInput = (
     label: string,
-    value: number | undefined,
-    onChange: (val: number | undefined) => void,
+    value: number | null | undefined,
+    onChange: (val: number | null) => void,
     unit: string,
     placeholder?: string
   ) => (
@@ -196,13 +252,13 @@ export default function SupplyDetails({
           value={value ?? ''}
           onChange={(e) => {
             const v = e.target.value
-            onChange(v === '' ? undefined : Number(v))
+            onChange(v === '' ? null : Number(v))
           }}
           placeholder={placeholder}
-          className="w-full bg-transparent text-cv-text font-mono text-sm outline-none placeholder:text-cv-text-muted/50"
+          className="w-full bg-transparent text-certvoice-text font-mono text-sm outline-none placeholder:text-certvoice-muted/50"
           aria-label={label}
         />
-        <span className="text-xs text-cv-text-muted font-mono shrink-0">{unit}</span>
+        <span className="text-xs text-certvoice-muted font-mono shrink-0">{unit}</span>
       </div>
     </div>
   )
@@ -220,7 +276,7 @@ export default function SupplyDetails({
         value={value ?? ''}
         onChange={(e) => onChange(sanitizeText(e.target.value))}
         placeholder={placeholder}
-        className="w-full bg-transparent text-cv-text text-sm outline-none placeholder:text-cv-text-muted/50"
+        className="w-full bg-transparent text-certvoice-text text-sm outline-none placeholder:text-certvoice-muted/50"
         aria-label={label}
       />
     </div>
@@ -229,7 +285,7 @@ export default function SupplyDetails({
   const renderSelectChips = <T extends string>(
     label: string,
     options: readonly T[] | { value: T; label: string }[],
-    selected: T | undefined,
+    selected: T | null | undefined,
     onChange: (val: T) => void
   ) => {
     const items = (options as readonly unknown[]).map((opt) =>
@@ -247,8 +303,8 @@ export default function SupplyDetails({
               onClick={() => onChange(item.value)}
               className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
                 selected === item.value
-                  ? 'bg-cv-accent/15 border-cv-accent text-cv-accent'
-                  : 'bg-cv-surface-2 border-cv-border text-cv-text-muted hover:border-cv-text-muted'
+                  ? 'bg-certvoice-accent/15 border-certvoice-accent text-certvoice-accent'
+                  : 'bg-certvoice-surface-2 border-certvoice-border text-certvoice-muted hover:border-certvoice-muted'
               }`}
             >
               {item.label}
@@ -265,14 +321,14 @@ export default function SupplyDetails({
     onChange: (val: boolean) => void
   ) => (
     <div className="flex items-center justify-between py-2">
-      <span className="text-sm text-cv-text">{label}</span>
+      <span className="text-sm text-certvoice-text">{label}</span>
       <button
         type="button"
         onClick={() => onChange(!value)}
         className={`w-8 h-8 rounded-lg border flex items-center justify-center transition-colors ${
           value
             ? 'bg-emerald-500/15 border-emerald-500 text-emerald-400'
-            : 'bg-cv-surface-2 border-cv-border text-cv-text-muted hover:border-cv-text-muted'
+            : 'bg-certvoice-surface-2 border-certvoice-border text-certvoice-muted hover:border-certvoice-muted'
         }`}
         aria-label={`${label}: ${value ? 'verified' : 'not verified'}`}
       >
@@ -283,28 +339,27 @@ export default function SupplyDetails({
 
   const renderBondingItem = (
     label: string,
-    target: BondingTarget,
-    state: TickState,
-    onChange: (val: TickState) => void
+    currentValue: BondingStatus,
+    onChange: (val: BondingStatus) => void
   ) => (
-    <div className="flex items-center justify-between py-2 border-b border-cv-border/50 last:border-0">
-      <span className="text-sm text-cv-text">{label}</span>
+    <div className="flex items-center justify-between py-2 border-b border-certvoice-border/50 last:border-0">
+      <span className="text-sm text-certvoice-text">{label}</span>
       <div className="flex gap-1">
-        {(['yes', 'na'] as const).map((opt) => (
+        {BONDING_OPTIONS.map((opt) => (
           <button
-            key={opt}
+            key={opt.value}
             type="button"
-            onClick={() => onChange(opt === state ? 'no' : opt)}
+            onClick={() => onChange(currentValue === opt.value ? 'UNSATISFACTORY' : opt.value)}
             className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors ${
-              state === opt
-                ? opt === 'yes'
+              currentValue === opt.value
+                ? opt.value === 'SATISFACTORY'
                   ? 'bg-emerald-500/15 text-emerald-400'
-                  : 'bg-cv-surface-2 text-cv-text-muted'
-                : 'bg-cv-bg text-cv-text-muted/50 hover:text-cv-text-muted'
+                  : 'bg-certvoice-surface-2 text-certvoice-muted'
+                : 'bg-certvoice-bg text-certvoice-muted/50 hover:text-certvoice-muted'
             }`}
-            aria-label={`${label}: ${opt}`}
+            aria-label={`${label}: ${opt.label}`}
           >
-            {opt === 'yes' ? '✓' : 'N/A'}
+            {opt.label}
           </button>
         ))}
       </div>
@@ -318,9 +373,9 @@ export default function SupplyDetails({
     supply.conductorConfig,
     supply.nominalVoltage,
     supply.nominalFrequency,
-    supply.prospectiveFaultCurrent,
-    supply.externalEarthFaultLoop,
-    supply.supplyProtectiveDeviceRating,
+    supply.ipf,
+    supply.ze,
+    supply.supplyDeviceRating,
   ].filter((v) => v !== undefined && v !== '' && v !== null).length
 
   // ─── Render ─────────────────────────────────────────────────────────────
@@ -329,18 +384,19 @@ export default function SupplyDetails({
       {/* Voice Capture */}
       <div className="cv-panel">
         <div className="flex items-center gap-2 mb-3">
-          <Zap className="w-4 h-4 text-cv-accent" />
-          <span className="text-xs font-semibold text-cv-accent uppercase tracking-wider">
+          <Zap className="w-4 h-4 text-certvoice-accent" />
+          <span className="text-xs font-semibold text-certvoice-accent uppercase tracking-wider">
             Voice Capture — Supply &amp; Installation
           </span>
         </div>
-        <p className="text-xs text-cv-text-muted mb-4">
+        <p className="text-xs text-certvoice-muted mb-4">
           Say things like: &quot;TN-C-S supply, 230 volts, Ze 0.28 ohms, PFC 1.6 kA,
           100 amp main fuse BS 1361, copper earth 16 mil, 10 mil bonding&quot;
         </p>
         <VoiceCapture
-          onResult={handleVoiceResult}
-          isProcessing={isExtracting}
+          onTranscript={handleVoiceTranscript}
+          locationContext="Supply intake"
+          disabled={isExtracting}
           compact
         />
       </div>
@@ -373,54 +429,66 @@ export default function SupplyDetails({
               {renderSelectChips(
                 'Conductor Config',
                 CONDUCTOR_CONFIGS,
-                supply.conductorConfig as typeof CONDUCTOR_CONFIGS[number] | undefined,
+                supply.conductorConfig,
                 (val) => updateSupply('conductorConfig', val)
               )}
             </div>
 
-            {renderTickField('Supply Polarity Confirmed', supply.polarityConfirmed, (val) =>
-              updateSupply('polarityConfirmed', val)
+            {renderTickField('Supply Polarity Confirmed', supply.supplyPolarityConfirmed, (val) =>
+              updateSupply('supplyPolarityConfirmed', val)
             )}
 
             {/* Other Sources */}
             <div className="cv-data-field">
               <label className="cv-data-label">Other Sources of Supply</label>
-              <input
-                type="text"
-                value={supply.otherSourcesOfSupply ?? ''}
-                onChange={(e) => updateSupply('otherSourcesOfSupply', sanitizeText(e.target.value))}
-                placeholder="e.g. Solar PV 4kW, Battery storage"
-                className="w-full bg-transparent text-cv-text text-sm outline-none placeholder:text-cv-text-muted/50"
-                aria-label="Other sources of supply"
-              />
+              <div className="flex items-center gap-2 mb-2">
+                <input
+                  type="checkbox"
+                  checked={supply.otherSourcesPresent}
+                  onChange={(e) => updateSupply('otherSourcesPresent', e.target.checked)}
+                  className="w-4 h-4 rounded border-certvoice-border"
+                  aria-label="Other sources present"
+                />
+                <span className="text-sm text-certvoice-muted">Present</span>
+              </div>
+              {supply.otherSourcesPresent && (
+                <input
+                  type="text"
+                  value={supply.otherSourcesDescription ?? ''}
+                  onChange={(e) => updateSupply('otherSourcesDescription', sanitizeText(e.target.value))}
+                  placeholder="e.g. Solar PV 4kW, Battery storage"
+                  className="w-full bg-transparent text-certvoice-text text-sm outline-none placeholder:text-certvoice-muted/50"
+                  aria-label="Other sources description"
+                />
+              )}
             </div>
 
             {/* Supply Parameters */}
             <div className="grid grid-cols-2 gap-3">
               {renderNumberInput('Nominal Voltage', supply.nominalVoltage, (v) => updateSupply('nominalVoltage', v), 'V', '230')}
-              {renderNumberInput('Frequency', supply.nominalFrequency, (v) => updateSupply('nominalFrequency', v), 'Hz', '50')}
-              {renderNumberInput('PFC (Ipf)', supply.prospectiveFaultCurrent, (v) => updateSupply('prospectiveFaultCurrent', v), 'kA', '1.6')}
-              {renderNumberInput('Ze', supply.externalEarthFaultLoop, (v) => updateSupply('externalEarthFaultLoop', v), 'Ω', '0.28')}
+              {renderNumberInput('Frequency', supply.nominalFrequency, (v) => updateSupply('nominalFrequency', v ?? 50), 'Hz', '50')}
+              {renderNumberInput('PFC (Ipf)', supply.ipf, (v) => updateSupply('ipf', v), 'kA', '1.6')}
+              {renderNumberInput('Ze', supply.ze, (v) => updateSupply('ze', v), 'Ω', '0.28')}
             </div>
 
             {/* Supply Protective Device */}
-            <div className="border-t border-cv-border/50 pt-3">
-              <span className="text-xs font-semibold text-cv-text-muted uppercase tracking-wider">
+            <div className="border-t border-certvoice-border/50 pt-3">
+              <span className="text-xs font-semibold text-certvoice-muted uppercase tracking-wider">
                 Supply Protective Device
               </span>
               <div className="grid grid-cols-2 gap-3 mt-2">
-                {renderTextInput('BS (EN)', supply.supplyProtectiveDeviceBS, (v) => updateSupply('supplyProtectiveDeviceBS', v), 'BS 1361')}
-                {renderTextInput('Type', supply.supplyProtectiveDeviceType, (v) => updateSupply('supplyProtectiveDeviceType', v), 'Type 2')}
+                {renderTextInput('BS (EN)', supply.supplyDeviceBsEn, (v) => updateSupply('supplyDeviceBsEn', v), 'BS 1361')}
+                {renderTextInput('Type', supply.supplyDeviceType, (v) => updateSupply('supplyDeviceType', v), 'Type 2')}
               </div>
-              {renderNumberInput('Rated Current', supply.supplyProtectiveDeviceRating, (v) => updateSupply('supplyProtectiveDeviceRating', v), 'A', '100')}
+              {renderNumberInput('Rated Current', supply.supplyDeviceRating, (v) => updateSupply('supplyDeviceRating', v), 'A', '100')}
             </div>
 
             {/* Ze Warning */}
-            {supply.externalEarthFaultLoop !== undefined && supply.externalEarthFaultLoop > 0.8 && (
+            {supply.ze !== null && supply.ze !== undefined && supply.ze > 0.8 && (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
                 <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                 <p className="text-xs text-amber-300">
-                  Ze of {supply.externalEarthFaultLoop}Ω is high. Verify earthing arrangement. TT systems typically
+                  Ze of {supply.ze}Ω is high. Verify earthing arrangement. TT systems typically
                   have Ze &gt;20Ω with earth electrode.
                 </p>
               </div>
@@ -441,37 +509,37 @@ export default function SupplyDetails({
           <div className="px-4 pb-4 space-y-4">
             {/* Means of Earthing */}
             <div className="space-y-2">
-              <span className="text-xs font-semibold text-cv-text-muted uppercase tracking-wider">
+              <span className="text-xs font-semibold text-certvoice-muted uppercase tracking-wider">
                 Means of Earthing
               </span>
-              {renderTickField("Distributor's Facility", particulars.distributorEarthFacility, (v) =>
-                updateParticulars('distributorEarthFacility', v)
+              {renderTickField("Distributor's Facility", particulars.distributorFacility, (v) =>
+                updateParticulars('distributorFacility', v)
               )}
-              {renderTickField('Installation Earth Electrode', particulars.installationEarthElectrode, (v) =>
-                updateParticulars('installationEarthElectrode', v)
+              {renderTickField('Installation Earth Electrode', particulars.installationElectrode, (v) =>
+                updateParticulars('installationElectrode', v)
               )}
             </div>
 
             {/* Earth Electrode Details (conditional) */}
-            {particulars.installationEarthElectrode && (
-              <div className="cv-panel !bg-cv-bg border border-cv-border/50 space-y-3">
-                <span className="text-xs font-semibold text-cv-text-muted uppercase tracking-wider">
+            {particulars.installationElectrode && (
+              <div className="cv-panel !bg-certvoice-bg border border-certvoice-border/50 space-y-3">
+                <span className="text-xs font-semibold text-certvoice-muted uppercase tracking-wider">
                   Earth Electrode Details
                 </span>
                 {renderTextInput('Electrode Type', particulars.electrodeType, (v) => updateParticulars('electrodeType', v), 'Rod / Tape / Plate')}
                 {renderTextInput('Electrode Location', particulars.electrodeLocation, (v) => updateParticulars('electrodeLocation', v), 'e.g. Front of property')}
-                {renderNumberInput('Electrode Resistance', particulars.electrodeResistance, (v) => updateParticulars('electrodeResistance', v), 'Ω', '28')}
+                {renderNumberInput('Electrode Resistance', particulars.electrodeResistance ?? null, (v) => updateParticulars('electrodeResistance', v), 'Ω', '28')}
               </div>
             )}
 
             {/* Main Switch */}
-            <div className="border-t border-cv-border/50 pt-3 space-y-3">
-              <span className="text-xs font-semibold text-cv-text-muted uppercase tracking-wider">
+            <div className="border-t border-certvoice-border/50 pt-3 space-y-3">
+              <span className="text-xs font-semibold text-certvoice-muted uppercase tracking-wider">
                 Main Switch / Circuit-Breaker / RCD
               </span>
               {renderTextInput('Location', particulars.mainSwitchLocation, (v) => updateParticulars('mainSwitchLocation', v), 'e.g. Hallway cupboard')}
               <div className="grid grid-cols-2 gap-3">
-                {renderTextInput('BS (EN)', particulars.mainSwitchBS, (v) => updateParticulars('mainSwitchBS', v), 'BS 60947')}
+                {renderTextInput('BS (EN)', particulars.mainSwitchBsEn, (v) => updateParticulars('mainSwitchBsEn', v), 'BS 60947')}
                 {renderNumberInput('Poles', particulars.mainSwitchPoles, (v) => updateParticulars('mainSwitchPoles', v), '', '2')}
                 {renderNumberInput('Current Rating', particulars.mainSwitchCurrentRating, (v) => updateParticulars('mainSwitchCurrentRating', v), 'A', '100')}
                 {renderNumberInput('Device Rating', particulars.mainSwitchDeviceRating, (v) => updateParticulars('mainSwitchDeviceRating', v), 'A', '80')}
@@ -479,29 +547,29 @@ export default function SupplyDetails({
               </div>
 
               {/* RCD on main switch */}
-              {renderSelectChips('RCD Type (if main switch is RCD)', RCD_TYPES, particulars.mainSwitchRCDType as typeof RCD_TYPES[number] | undefined, (v) =>
-                updateParticulars('mainSwitchRCDType', v)
+              {renderSelectChips('RCD Type (if main switch is RCD)', RCD_TYPES, particulars.mainSwitchRcdType ?? null, (v) =>
+                updateParticulars('mainSwitchRcdType', v)
               )}
-              {particulars.mainSwitchRCDType && (
+              {particulars.mainSwitchRcdType && (
                 <div className="grid grid-cols-2 gap-3">
-                  {renderNumberInput('RCD IΔn', particulars.mainSwitchRCDRating, (v) => updateParticulars('mainSwitchRCDRating', v), 'mA', '30')}
-                  {renderNumberInput('Time Delay', particulars.mainSwitchRCDTimeDelay, (v) => updateParticulars('mainSwitchRCDTimeDelay', v), 'ms', '0')}
-                  {renderNumberInput('Measured Trip Time', particulars.mainSwitchRCDMeasuredTime, (v) => updateParticulars('mainSwitchRCDMeasuredTime', v), 'ms', '22')}
+                  {renderNumberInput('RCD IΔn', particulars.mainSwitchRcdRating ?? null, (v) => updateParticulars('mainSwitchRcdRating', v), 'mA', '30')}
+                  {renderNumberInput('Time Delay', particulars.mainSwitchRcdTimeDelay ?? null, (v) => updateParticulars('mainSwitchRcdTimeDelay', v), 'ms', '0')}
+                  {renderNumberInput('Measured Trip Time', particulars.mainSwitchRcdMeasuredTime ?? null, (v) => updateParticulars('mainSwitchRcdMeasuredTime', v), 'ms', '22')}
                 </div>
               )}
             </div>
 
             {/* Earthing Conductor */}
-            <div className="border-t border-cv-border/50 pt-3 space-y-3">
-              <span className="text-xs font-semibold text-cv-text-muted uppercase tracking-wider flex items-center gap-2">
+            <div className="border-t border-certvoice-border/50 pt-3 space-y-3">
+              <span className="text-xs font-semibold text-certvoice-muted uppercase tracking-wider flex items-center gap-2">
                 <Cable className="w-3 h-3" />
                 Earthing Conductor
               </span>
-              {renderSelectChips('Material', CONDUCTOR_MATERIALS, particulars.earthingConductorMaterial as typeof CONDUCTOR_MATERIALS[number] | undefined, (v) =>
+              {renderSelectChips('Material', CONDUCTOR_MATERIALS, particulars.earthingConductorMaterial, (v) =>
                 updateParticulars('earthingConductorMaterial', v)
               )}
               <div className="grid grid-cols-2 gap-3">
-                {renderNumberInput('CSA', particulars.earthingConductorCSA, (v) => updateParticulars('earthingConductorCSA', v), 'mm²', '16')}
+                {renderNumberInput('CSA', particulars.earthingConductorCsa, (v) => updateParticulars('earthingConductorCsa', v), 'mm²', '16')}
               </div>
               {renderTickField('Connection Verified', particulars.earthingConductorVerified, (v) =>
                 updateParticulars('earthingConductorVerified', v)
@@ -509,15 +577,15 @@ export default function SupplyDetails({
             </div>
 
             {/* Main Protective Bonding */}
-            <div className="border-t border-cv-border/50 pt-3 space-y-3">
-              <span className="text-xs font-semibold text-cv-text-muted uppercase tracking-wider">
+            <div className="border-t border-certvoice-border/50 pt-3 space-y-3">
+              <span className="text-xs font-semibold text-certvoice-muted uppercase tracking-wider">
                 Main Protective Bonding Conductors
               </span>
-              {renderSelectChips('Material', CONDUCTOR_MATERIALS, particulars.bondingConductorMaterial as typeof CONDUCTOR_MATERIALS[number] | undefined, (v) =>
+              {renderSelectChips('Material', CONDUCTOR_MATERIALS, particulars.bondingConductorMaterial, (v) =>
                 updateParticulars('bondingConductorMaterial', v)
               )}
               <div className="grid grid-cols-2 gap-3">
-                {renderNumberInput('CSA', particulars.bondingConductorCSA, (v) => updateParticulars('bondingConductorCSA', v), 'mm²', '10')}
+                {renderNumberInput('CSA', particulars.bondingConductorCsa, (v) => updateParticulars('bondingConductorCsa', v), 'mm²', '10')}
               </div>
               {renderTickField('Connection Verified', particulars.bondingConductorVerified, (v) =>
                 updateParticulars('bondingConductorVerified', v)
@@ -525,26 +593,33 @@ export default function SupplyDetails({
             </div>
 
             {/* Bonding of Extraneous-Conductive-Parts */}
-            <div className="border-t border-cv-border/50 pt-3 space-y-1">
-              <span className="text-xs font-semibold text-cv-text-muted uppercase tracking-wider">
+            <div className="border-t border-certvoice-border/50 pt-3 space-y-1">
+              <span className="text-xs font-semibold text-certvoice-muted uppercase tracking-wider">
                 Bonding of Extraneous-Conductive-Parts
               </span>
-              {renderBondingItem('Water Pipes', 'waterPipes', particulars.bondingWater ?? 'no', (v) =>
+              {renderBondingItem('Water Pipes', particulars.bondingWater, (v) =>
                 updateParticulars('bondingWater', v)
               )}
-              {renderBondingItem('Gas Pipes', 'gasPipes', particulars.bondingGas ?? 'no', (v) =>
+              {renderBondingItem('Gas Pipes', particulars.bondingGas, (v) =>
                 updateParticulars('bondingGas', v)
               )}
-              {renderBondingItem('Oil Pipes', 'oilPipes', particulars.bondingOil ?? 'no', (v) =>
+              {renderBondingItem('Oil Pipes', particulars.bondingOil, (v) =>
                 updateParticulars('bondingOil', v)
               )}
-              {renderBondingItem('Structural Steel', 'structuralSteel', particulars.bondingSteel ?? 'no', (v) =>
+              {renderBondingItem('Structural Steel', particulars.bondingSteel, (v) =>
                 updateParticulars('bondingSteel', v)
               )}
-              {renderBondingItem('Lightning Protection', 'lightningProtection', particulars.bondingLightning ?? 'no', (v) =>
+              {renderBondingItem('Lightning Protection', particulars.bondingLightning, (v) =>
                 updateParticulars('bondingLightning', v)
               )}
-              {renderTextInput('Other (specify)', particulars.bondingOther, (v) => updateParticulars('bondingOther', v), 'e.g. Central heating')}
+              {renderBondingItem('Other', particulars.bondingOther, (v) =>
+                updateParticulars('bondingOther', v)
+              )}
+              {particulars.bondingOther === 'SATISFACTORY' && (
+                <div className="pt-2">
+                  {renderTextInput('Other Description', particulars.bondingOtherDescription, (v) => updateParticulars('bondingOtherDescription', v), 'e.g. Central heating')}
+                </div>
+              )}
             </div>
           </div>
         )}
