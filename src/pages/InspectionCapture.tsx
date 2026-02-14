@@ -1,63 +1,119 @@
-// ============================================================
-// src/pages/InspectionCapture.tsx
-// CertVoice - Main Inspection Capture Workflow
-// Phase 3: Certificate Assembly - Item #29
-// ============================================================
+/**
+ * CertVoice — InspectionCapture Page
+ *
+ * Main capture workflow for an EICR inspection.
+ * Orchestrates 4 tabs: Circuits, Observations, Supply, Checklist.
+ *
+ * Receives a Partial<EICRCertificate> from NewInspection via
+ * navigation state (location.state.certificate).
+ *
+ * Component prop interfaces (from actual deployed files):
+ *   CircuitRecorder:     locationContext, dbContext, existingCircuits, earthingType, onCircuitConfirmed, onCancel
+ *   ObservationRecorder: locationContext, dbContext, nextItemNumber, earthingType, existingCircuits, onObservationConfirmed, onCancel
+ *   SupplyDetails:       supply, particulars, onSupplyChange, onParticularsChange
+ *   InspectionChecklist: items, onItemChange, onBulkPass
+ *
+ * @module pages/InspectionCapture
+ */
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useState, useCallback, useMemo } from 'react'
+import { useLocation, useNavigate, Link } from 'react-router-dom'
 import { Helmet } from 'react-helmet-async'
 import {
   ArrowLeft,
-  Battery,
-  Camera,
-  Check,
-  CheckSquare,
-  ChevronDown,
-  CircleDot,
-  ClipboardCheck,
-  Eye,
-  Edit3,
-  Mic,
-  MoreVertical,
+  Zap,
+  CircuitBoard,
+  AlertTriangle,
+  Settings2,
+  ClipboardList,
   Plus,
   Save,
-  Trash2,
-  AlertTriangle,
-  Zap,
 } from 'lucide-react'
+import type {
+  EICRCertificate,
+  CircuitDetail,
+  Observation,
+  DistributionBoardHeader,
+  SupplyCharacteristics,
+  InstallationParticulars,
+  InspectionItem,
+  InspectionOutcome,
+  ClassificationCode,
+} from '../types/eicr'
 import CircuitRecorder from '../components/CircuitRecorder'
 import ObservationRecorder from '../components/ObservationRecorder'
 import SupplyDetails from '../components/SupplyDetails'
 import InspectionChecklist from '../components/InspectionChecklist'
 import { captureError } from '../utils/errorTracking'
-import { trackInspectionProgress } from '../utils/analytics'
-import type {
-  EICRCertificate,
-  CircuitDetail,
-  Observation,
-  InspectionItem,
-  SupplyCharacteristics,
-  InstallationParticulars,
-} from '../types/eicr'
+import { trackCircuitCaptured, trackObservationCaptured, trackChecklistProgress } from '../utils/analytics'
 
 // ============================================================
 // TYPES
 // ============================================================
 
-type CaptureTab = 'supply' | 'circuits' | 'observations' | 'checklist'
+type CaptureTab = 'circuits' | 'observations' | 'supply' | 'checklist'
 
-interface TabConfig {
-  id: CaptureTab
-  label: string
-  icon: React.ReactNode
-  badge?: number | string
-  badgeColor?: 'green' | 'amber' | 'red'
+// ============================================================
+// DEFAULT EMPTY SUPPLY / PARTICULARS
+// ============================================================
+
+const EMPTY_SUPPLY: SupplyCharacteristics = {
+  earthingType: null,
+  supplyType: null,
+  conductorConfig: null,
+  polarityConfirmed: false,
+  otherSources: null,
+  nominalVoltage: null,
+  nominalFrequency: 50,
+  prospectiveFaultCurrent: null,
+  externalEarthFaultLoop: null,
+  supplyProtectiveDevice: {
+    bsNumber: null,
+    type: null,
+    ratedCurrent: null,
+  },
 }
 
-interface CaptureMode {
-  type: 'idle' | 'circuit' | 'observation'
-  editingId?: string
+const EMPTY_PARTICULARS: InstallationParticulars = {
+  meansOfEarthing: {
+    distributorFacility: false,
+    installationElectrode: false,
+  },
+  earthElectrode: {
+    type: null,
+    location: null,
+    resistance: null,
+  },
+  mainSwitch: {
+    location: null,
+    bsNumber: null,
+    numberOfPoles: null,
+    currentRating: null,
+    fuseRating: null,
+    voltageRating: null,
+    rcdType: null,
+    rcdRating: null,
+    rcdTimeDelay: null,
+    rcdOperatingTime: null,
+  },
+  earthingConductor: {
+    material: null,
+    csa: null,
+    connectionVerified: false,
+  },
+  mainBonding: {
+    material: null,
+    csa: null,
+    connectionVerified: false,
+  },
+  bondingConnections: {
+    waterPipes: null,
+    gasPipes: null,
+    oilPipes: null,
+    structuralSteel: null,
+    lightningProtection: null,
+    other: null,
+  },
 }
 
 // ============================================================
@@ -65,489 +121,589 @@ interface CaptureMode {
 // ============================================================
 
 export default function InspectionCapture() {
-  const { id } = useParams<{ id: string }>()
+  const location = useLocation()
   const navigate = useNavigate()
 
-  // State
-  const [certificate, setCertificate] = useState<Partial<EICRCertificate> | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<CaptureTab>('supply')
-  const [captureMode, setCaptureMode] = useState<CaptureMode>({ type: 'idle' })
-  const [showMenu, setShowMenu] = useState(false)
-  const [lastSaved, setLastSaved] = useState<Date | null>(null)
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
-  const [activeDBIndex, setActiveDBIndex] = useState(0)
-  const [showDBSelector, setShowDBSelector] = useState(false)
+  // --- Certificate state ---
+  const initialCert = (location.state as { certificate?: Partial<EICRCertificate> })
+    ?.certificate ?? {
+    id: crypto.randomUUID(),
+    reportNumber: `CV-${Date.now().toString(36).toUpperCase()}`,
+    status: 'DRAFT' as const,
+    observations: [],
+    circuits: [],
+    distributionBoards: [
+      {
+        dbReference: 'DB1',
+        dbLocation: 'Main consumer unit',
+      } as DistributionBoardHeader,
+    ],
+    inspectionSchedule: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }
 
-  // Load Certificate
-  useEffect(() => {
-    const loadCertificate = async () => {
-      setIsLoading(true)
-      try {
-        const draftData = sessionStorage.getItem('certvoice_draft_certificate')
-        if (draftData) {
-          const parsed = JSON.parse(draftData)
-          if (parsed.id === id) {
-            setCertificate(parsed)
-            setIsLoading(false)
-            return
-          }
-        }
-        setCertificate({
-          id: id || crypto.randomUUID(),
-          status: 'draft',
-          circuits: [],
-          observations: [],
-          inspectionSchedule: [],
-          distributionBoards: [{
-            reference: 'DB1',
-            location: 'Main Consumer Unit',
-            suppliedFrom: 'Origin',
-            numberOfPhases: 1,
-          }],
-        })
-      } catch (error) {
-        captureError(error, 'InspectionCapture.loadCertificate')
-      } finally {
-        setIsLoading(false)
-      }
-    }
-    loadCertificate()
-  }, [id])
+  const [certificate, setCertificate] = useState<Partial<EICRCertificate>>(initialCert)
+  const [activeTab, setActiveTab] = useState<CaptureTab>('circuits')
+  const [activeDbIndex, setActiveDbIndex] = useState(0)
+  const [showCircuitRecorder, setShowCircuitRecorder] = useState(false)
+  const [showObservationRecorder, setShowObservationRecorder] = useState(false)
+  const [editingCircuitIndex, setEditingCircuitIndex] = useState<number | null>(null)
+  const [editingObsIndex, setEditingObsIndex] = useState<number | null>(null)
 
-  // Auto-save
-  useEffect(() => {
-    if (!certificate || !hasUnsavedChanges) return
-    const saveTimer = setTimeout(() => {
-      try {
-        sessionStorage.setItem('certvoice_draft_certificate', JSON.stringify(certificate))
-        setLastSaved(new Date())
-        setHasUnsavedChanges(false)
-      } catch (error) {
-        captureError(error, 'InspectionCapture.autoSave')
-      }
-    }, 2000)
-    return () => clearTimeout(saveTimer)
-  }, [certificate, hasUnsavedChanges])
+  // --- Derived state ---
+  const boards = certificate.distributionBoards ?? []
+  const activeBoard = boards[activeDbIndex]
+  const circuits = certificate.circuits ?? []
+  const observations = certificate.observations ?? []
+  const supply = certificate.supplyCharacteristics ?? EMPTY_SUPPLY
+  const particulars = certificate.installationParticulars ?? EMPTY_PARTICULARS
+  const inspectionItems = certificate.inspectionSchedule ?? []
 
-  // Computed values
-  const circuitCount = certificate?.circuits?.length || 0
-  const observationCount = certificate?.observations?.length || 0
-  
-  const observationsByCode = useMemo(() => {
-    const counts = { C1: 0, C2: 0, C3: 0, FI: 0 }
-    certificate?.observations?.forEach((obs) => {
-      if (obs.classification in counts) {
-        counts[obs.classification as keyof typeof counts]++
+  const earthingType = supply.earthingType
+
+  // Circuits for current board
+  const boardCircuits = useMemo(
+    () => circuits.filter((c) => c.dbReference === activeBoard?.dbReference),
+    [circuits, activeBoard]
+  )
+
+  // Observation counts
+  const obsCounts = useMemo(() => {
+    const counts: Record<ClassificationCode, number> = { C1: 0, C2: 0, C3: 0, FI: 0 }
+    observations.forEach((o) => {
+      if (o.classificationCode && counts[o.classificationCode] !== undefined) {
+        counts[o.classificationCode]++
       }
     })
     return counts
-  }, [certificate?.observations])
+  }, [observations])
 
-  const hasC1OrC2 = observationsByCode.C1 > 0 || observationsByCode.C2 > 0
+  const hasUnsatisfactory = obsCounts.C1 > 0 || obsCounts.C2 > 0 || obsCounts.FI > 0
 
-  const checklistProgress = useMemo(() => {
-    const items = certificate?.inspectionSchedule || []
-    const completed = items.filter((item) => item.outcome && item.outcome !== 'NA').length
-    return { completed, total: items.length || 70 }
-  }, [certificate?.inspectionSchedule])
+  // ============================================================
+  // HANDLERS: CIRCUITS
+  // ============================================================
 
-  const supplyComplete = Boolean(
-    certificate?.supplyCharacteristics?.earthingType &&
-    certificate?.supplyCharacteristics?.nominalVoltage
+  const handleCircuitConfirmed = useCallback(
+    (circuit: Partial<CircuitDetail>) => {
+      try {
+        setCertificate((prev) => {
+          const existing = [...(prev.circuits ?? [])]
+          if (editingCircuitIndex !== null) {
+            existing[editingCircuitIndex] = { ...existing[editingCircuitIndex], ...circuit }
+          } else {
+            existing.push({
+              ...circuit,
+              dbReference: activeBoard?.dbReference ?? 'DB1',
+            } as CircuitDetail)
+          }
+          return { ...prev, circuits: existing, updatedAt: new Date().toISOString() }
+        })
+        trackCircuitCaptured()
+        setShowCircuitRecorder(false)
+        setEditingCircuitIndex(null)
+      } catch (error) {
+        captureError(error, 'InspectionCapture.handleCircuitConfirmed')
+      }
+    },
+    [editingCircuitIndex, activeBoard]
   )
 
-  const tabs: TabConfig[] = [
-    { id: 'supply', label: 'Supply', icon: <Zap className="w-4 h-4" />, badge: supplyComplete ? '✓' : '!', badgeColor: supplyComplete ? 'green' : 'amber' },
-    { id: 'circuits', label: 'Circuits', icon: <CircleDot className="w-4 h-4" />, badge: circuitCount > 0 ? circuitCount : undefined, badgeColor: 'green' },
-    { id: 'observations', label: 'Observations', icon: <AlertTriangle className="w-4 h-4" />, badge: observationCount > 0 ? observationCount : undefined, badgeColor: hasC1OrC2 ? 'red' : observationCount > 0 ? 'amber' : undefined },
-    { id: 'checklist', label: 'Checklist', icon: <CheckSquare className="w-4 h-4" />, badge: checklistProgress.total > 0 ? `${checklistProgress.completed}/${checklistProgress.total}` : undefined, badgeColor: checklistProgress.completed === checklistProgress.total ? 'green' : 'amber' },
+  // ============================================================
+  // HANDLERS: OBSERVATIONS
+  // ============================================================
+
+  const handleObservationConfirmed = useCallback(
+    (observation: Partial<Observation>) => {
+      try {
+        setCertificate((prev) => {
+          const existing = [...(prev.observations ?? [])]
+          if (editingObsIndex !== null) {
+            existing[editingObsIndex] = { ...existing[editingObsIndex], ...observation }
+          } else {
+            existing.push({
+              ...observation,
+              itemNumber: existing.length + 1,
+              dbReference: activeBoard?.dbReference ?? 'DB1',
+            } as Observation)
+          }
+          return { ...prev, observations: existing, updatedAt: new Date().toISOString() }
+        })
+        trackObservationCaptured()
+        setShowObservationRecorder(false)
+        setEditingObsIndex(null)
+      } catch (error) {
+        captureError(error, 'InspectionCapture.handleObservationConfirmed')
+      }
+    },
+    [editingObsIndex, activeBoard]
+  )
+
+  // ============================================================
+  // HANDLERS: SUPPLY
+  // ============================================================
+
+  const handleSupplyChange = useCallback((updated: SupplyCharacteristics) => {
+    setCertificate((prev) => ({
+      ...prev,
+      supplyCharacteristics: updated,
+      updatedAt: new Date().toISOString(),
+    }))
+  }, [])
+
+  const handleParticularsChange = useCallback((updated: InstallationParticulars) => {
+    setCertificate((prev) => ({
+      ...prev,
+      installationParticulars: updated,
+      updatedAt: new Date().toISOString(),
+    }))
+  }, [])
+
+  // ============================================================
+  // HANDLERS: CHECKLIST
+  // ============================================================
+
+  const handleItemChange = useCallback(
+    (itemId: string, outcome: InspectionOutcome | null, notes: string) => {
+      try {
+        setCertificate((prev) => {
+          const items = [...(prev.inspectionSchedule ?? [])]
+          const idx = items.findIndex((i) => i.id === itemId)
+          if (idx >= 0) {
+            items[idx] = { ...items[idx], outcome, notes }
+          }
+          return { ...prev, inspectionSchedule: items, updatedAt: new Date().toISOString() }
+        })
+        trackChecklistProgress()
+      } catch (error) {
+        captureError(error, 'InspectionCapture.handleItemChange')
+      }
+    },
+    []
+  )
+
+  const handleBulkPass = useCallback((sectionNumber: number) => {
+    try {
+      setCertificate((prev) => {
+        const items = [...(prev.inspectionSchedule ?? [])]
+        const updated = items.map((item) => {
+          if (item.sectionNumber === sectionNumber && !item.outcome) {
+            return { ...item, outcome: 'PASS' as InspectionOutcome }
+          }
+          return item
+        })
+        return { ...prev, inspectionSchedule: updated, updatedAt: new Date().toISOString() }
+      })
+    } catch (error) {
+      captureError(error, 'InspectionCapture.handleBulkPass')
+    }
+  }, [])
+
+  // ============================================================
+  // HANDLERS: DB MANAGEMENT
+  // ============================================================
+
+  const handleAddBoard = useCallback(() => {
+    setCertificate((prev) => {
+      const existing = [...(prev.distributionBoards ?? [])]
+      const newRef = `DB${existing.length + 1}`
+      existing.push({
+        dbReference: newRef,
+        dbLocation: '',
+      } as DistributionBoardHeader)
+      return { ...prev, distributionBoards: existing }
+    })
+  }, [])
+
+  // ============================================================
+  // HANDLERS: SAVE
+  // ============================================================
+
+  const handleSave = useCallback(() => {
+    try {
+      // TODO: Save to API in Phase 6
+      const updatedCert = { ...certificate, updatedAt: new Date().toISOString() }
+      setCertificate(updatedCert)
+      // For now, show a simple confirmation
+    } catch (error) {
+      captureError(error, 'InspectionCapture.handleSave')
+    }
+  }, [certificate])
+
+  // ============================================================
+  // TAB CONFIG
+  // ============================================================
+
+  const TABS: { id: CaptureTab; label: string; icon: typeof Zap; count?: number }[] = [
+    { id: 'circuits', label: 'Circuits', icon: CircuitBoard, count: circuits.length },
+    { id: 'observations', label: 'Observations', icon: AlertTriangle, count: observations.length },
+    { id: 'supply', label: 'Supply', icon: Settings2 },
+    { id: 'checklist', label: 'Checklist', icon: ClipboardList },
   ]
 
-  // Handlers
-  const handleSupplyUpdate = useCallback((supply: SupplyCharacteristics, particulars: InstallationParticulars) => {
-    setCertificate((prev) => prev ? { ...prev, supplyCharacteristics: supply, installationParticulars: particulars, updatedAt: new Date().toISOString() } : null)
-    setHasUnsavedChanges(true)
-    trackInspectionProgress({ certificateId: id || '', section: 'supply', action: 'update' })
-  }, [id])
+  // ============================================================
+  // RENDER: CIRCUITS TAB
+  // ============================================================
 
-  const handleCircuitAdd = useCallback((circuit: CircuitDetail) => {
-    setCertificate((prev) => {
-      if (!prev) return null
-      return { ...prev, circuits: [...(prev.circuits || []), circuit], updatedAt: new Date().toISOString() }
-    })
-    setHasUnsavedChanges(true)
-    setCaptureMode({ type: 'idle' })
-    trackInspectionProgress({ certificateId: id || '', section: 'circuits', action: 'add', count: (certificate?.circuits?.length || 0) + 1 })
-  }, [id, certificate?.circuits?.length])
-
-  const handleCircuitUpdate = useCallback((circuitId: string, updates: Partial<CircuitDetail>) => {
-    setCertificate((prev) => {
-      if (!prev) return null
-      return { ...prev, circuits: (prev.circuits || []).map((c) => c.id === circuitId ? { ...c, ...updates } : c), updatedAt: new Date().toISOString() }
-    })
-    setHasUnsavedChanges(true)
-    setCaptureMode({ type: 'idle' })
-  }, [])
-
-  const handleCircuitDelete = useCallback((circuitId: string) => {
-    if (!confirm('Delete this circuit?')) return
-    setCertificate((prev) => {
-      if (!prev) return null
-      return { ...prev, circuits: (prev.circuits || []).filter((c) => c.id !== circuitId), updatedAt: new Date().toISOString() }
-    })
-    setHasUnsavedChanges(true)
-  }, [])
-
-  const handleObservationAdd = useCallback((observation: Observation) => {
-    setCertificate((prev) => {
-      if (!prev) return null
-      return { ...prev, observations: [...(prev.observations || []), observation], updatedAt: new Date().toISOString() }
-    })
-    setHasUnsavedChanges(true)
-    setCaptureMode({ type: 'idle' })
-    trackInspectionProgress({ certificateId: id || '', section: 'observations', action: 'add', classification: observation.classification })
-  }, [id])
-
-  const handleObservationUpdate = useCallback((obsId: string, updates: Partial<Observation>) => {
-    setCertificate((prev) => {
-      if (!prev) return null
-      return { ...prev, observations: (prev.observations || []).map((o) => o.id === obsId ? { ...o, ...updates } : o), updatedAt: new Date().toISOString() }
-    })
-    setHasUnsavedChanges(true)
-    setCaptureMode({ type: 'idle' })
-  }, [])
-
-  const handleObservationDelete = useCallback((obsId: string) => {
-    if (!confirm('Delete this observation?')) return
-    setCertificate((prev) => {
-      if (!prev) return null
-      return { ...prev, observations: (prev.observations || []).filter((o) => o.id !== obsId), updatedAt: new Date().toISOString() }
-    })
-    setHasUnsavedChanges(true)
-  }, [])
-
-  const handleChecklistUpdate = useCallback((items: InspectionItem[]) => {
-    setCertificate((prev) => prev ? { ...prev, inspectionSchedule: items, updatedAt: new Date().toISOString() } : null)
-    setHasUnsavedChanges(true)
-  }, [])
-
-  const handleDistributionBoardAdd = useCallback(() => {
-    setCertificate((prev) => {
-      if (!prev) return null
-      const boards = [...(prev.distributionBoards || [])]
-      const newIndex = boards.length + 1
-      boards.push({ reference: `DB${newIndex}`, location: '', suppliedFrom: boards.length === 0 ? 'Origin' : `DB${newIndex - 1}`, numberOfPhases: 1 })
-      return { ...prev, distributionBoards: boards, updatedAt: new Date().toISOString() }
-    })
-    setHasUnsavedChanges(true)
-  }, [])
-
-  const handleSaveAndExit = useCallback(() => {
-    try {
-      if (certificate) sessionStorage.setItem('certvoice_draft_certificate', JSON.stringify(certificate))
-      navigate('/')
-    } catch (error) {
-      captureError(error, 'InspectionCapture.handleSaveAndExit')
-    }
-  }, [certificate, navigate])
-
-  const handleProceedToReview = useCallback(() => {
-    if (circuitCount === 0) {
-      alert('Please add at least one circuit.')
-      setActiveTab('circuits')
-      return
-    }
-    if (!supplyComplete) {
-      alert('Please complete supply details.')
-      setActiveTab('supply')
-      return
-    }
-    try {
-      if (certificate) sessionStorage.setItem('certvoice_draft_certificate', JSON.stringify(certificate))
-      navigate(`/inspection/${id}/review`)
-    } catch (error) {
-      captureError(error, 'InspectionCapture.handleProceedToReview')
-    }
-  }, [certificate, circuitCount, supplyComplete, id, navigate])
-
-  // Render Tab Bar
-  const renderTabBar = () => (
-    <div className="flex overflow-x-auto hide-scrollbar border-b border-border bg-surface">
-      {tabs.map((tab) => (
+  const renderCircuitsTab = () => (
+    <div className="space-y-3">
+      {/* Board selector */}
+      <div className="flex items-center gap-2">
+        <div className="flex-1 flex gap-1 overflow-x-auto">
+          {boards.map((board, idx) => (
+            <button
+              key={board.dbReference ?? idx}
+              type="button"
+              onClick={() => setActiveDbIndex(idx)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap border transition-colors ${
+                activeDbIndex === idx
+                  ? 'bg-certvoice-accent/15 border-certvoice-accent text-certvoice-accent'
+                  : 'bg-certvoice-surface-2 border-certvoice-border text-certvoice-muted'
+              }`}
+            >
+              {board.dbReference ?? `DB${idx + 1}`}
+            </button>
+          ))}
+        </div>
         <button
-          key={tab.id}
           type="button"
-          onClick={() => setActiveTab(tab.id)}
-          className={`flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${activeTab === tab.id ? 'border-accent text-accent' : 'border-transparent text-text-muted hover:text-text hover:bg-surface-2'}`}
+          onClick={handleAddBoard}
+          className="w-7 h-7 rounded-lg border border-certvoice-border flex items-center justify-center
+                     text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors"
         >
-          {tab.icon}
-          {tab.label}
-          {tab.badge && (
-            <span className={`px-1.5 py-0.5 text-xs rounded-full font-semibold ${tab.badgeColor === 'green' ? 'bg-green-500/20 text-green-500' : ''} ${tab.badgeColor === 'amber' ? 'bg-amber-500/20 text-amber-500' : ''} ${tab.badgeColor === 'red' ? 'bg-red-500/20 text-red-500' : ''}`}>
-              {tab.badge}
+          <Plus className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Board info */}
+      {activeBoard && (
+        <div className="text-xs text-certvoice-muted">
+          {activeBoard.dbLocation ? `Location: ${activeBoard.dbLocation}` : 'No location set'} ·{' '}
+          {boardCircuits.length} circuit{boardCircuits.length !== 1 ? 's' : ''}
+        </div>
+      )}
+
+      {/* Circuit list */}
+      {boardCircuits.length === 0 ? (
+        <div className="cv-panel text-center py-8">
+          <CircuitBoard className="w-6 h-6 text-certvoice-muted/40 mx-auto mb-2" />
+          <p className="text-xs text-certvoice-muted">No circuits captured yet</p>
+          <p className="text-[10px] text-certvoice-muted/60 mt-1">
+            Tap + to record test results by voice
+          </p>
+        </div>
+      ) : (
+        boardCircuits.map((circuit, idx) => {
+          const globalIdx = circuits.findIndex(
+            (c) => c.circuitNumber === circuit.circuitNumber && c.dbReference === circuit.dbReference
+          )
+          const isPass = circuit.circuitStatus === 'SATISFACTORY'
+          return (
+            <button
+              key={`${circuit.circuitNumber}-${idx}`}
+              type="button"
+              onClick={() => {
+                setEditingCircuitIndex(globalIdx)
+                setShowCircuitRecorder(true)
+              }}
+              className="cv-panel w-full text-left p-3 hover:border-certvoice-accent/50 transition-colors"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-semibold text-certvoice-text">
+                    Cct {circuit.circuitNumber}
+                  </span>
+                  <span className="text-xs text-certvoice-muted ml-2">
+                    {circuit.circuitDescription ?? ''}
+                  </span>
+                </div>
+                <span
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                    isPass ? 'cv-badge-pass' : 'cv-badge-fail'
+                  }`}
+                >
+                  {circuit.circuitStatus ?? 'INCOMPLETE'}
+                </span>
+              </div>
+              {circuit.circuitLocation && (
+                <div className="text-[10px] text-certvoice-muted mt-1">
+                  {circuit.circuitLocation}
+                </div>
+              )}
+            </button>
+          )
+        })
+      )}
+
+      {/* Add circuit button */}
+      <button
+        type="button"
+        onClick={() => {
+          setEditingCircuitIndex(null)
+          setShowCircuitRecorder(true)
+        }}
+        className="cv-btn-primary w-full flex items-center justify-center gap-2"
+      >
+        <Plus className="w-4 h-4" />
+        Record Circuit
+      </button>
+
+      {/* Circuit Recorder */}
+      {showCircuitRecorder && (
+        <CircuitRecorder
+          locationContext={activeBoard?.dbLocation ?? ''}
+          dbContext={activeBoard?.dbReference ?? 'DB1'}
+          existingCircuits={boardCircuits.map((c) => c.circuitNumber ?? '')}
+          earthingType={earthingType}
+          onCircuitConfirmed={handleCircuitConfirmed}
+          onCancel={() => {
+            setShowCircuitRecorder(false)
+            setEditingCircuitIndex(null)
+          }}
+        />
+      )}
+    </div>
+  )
+
+  // ============================================================
+  // RENDER: OBSERVATIONS TAB
+  // ============================================================
+
+  const renderObservationsTab = () => (
+    <div className="space-y-3">
+      {/* Summary badges */}
+      {observations.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {obsCounts.C1 > 0 && (
+            <span className="cv-code-c1 text-xs px-2 py-1 rounded font-semibold">
+              C1: {obsCounts.C1}
             </span>
           )}
-        </button>
-      ))}
-    </div>
-  )
-
-  // Render Circuits Tab
-  const renderCircuitsTab = () => (
-    <div className="space-y-4">
-      {(certificate?.distributionBoards?.length || 0) > 1 && (
-        <div className="cv-panel">
-          <button type="button" onClick={() => setShowDBSelector(!showDBSelector)} className="w-full flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Battery className="w-5 h-5 text-accent" />
-              <span className="font-medium">{certificate?.distributionBoards?.[activeDBIndex]?.reference || 'DB1'}</span>
-              <span className="text-sm text-text-muted">- {certificate?.distributionBoards?.[activeDBIndex]?.location || 'Main Consumer Unit'}</span>
-            </div>
-            <ChevronDown className={`w-5 h-5 text-text-muted transition-transform ${showDBSelector ? 'rotate-180' : ''}`} />
-          </button>
-          {showDBSelector && (
-            <div className="mt-3 pt-3 border-t border-border space-y-2">
-              {certificate?.distributionBoards?.map((db, index) => (
-                <button key={db.reference} type="button" onClick={() => { setActiveDBIndex(index); setShowDBSelector(false) }} className={`w-full p-3 rounded-lg text-left transition-colors ${index === activeDBIndex ? 'bg-accent/10 border border-accent' : 'bg-surface-2 hover:bg-surface-2/80'}`}>
-                  <div className="font-medium">{db.reference}</div>
-                  <div className="text-sm text-text-muted">{db.location || 'Location not set'}</div>
-                </button>
-              ))}
-              <button type="button" onClick={handleDistributionBoardAdd} className="w-full p-3 rounded-lg border-2 border-dashed border-border text-text-muted hover:border-accent hover:text-accent transition-colors flex items-center justify-center gap-2">
-                <Plus className="w-4 h-4" />Add Distribution Board
-              </button>
-            </div>
+          {obsCounts.C2 > 0 && (
+            <span className="cv-code-c2 text-xs px-2 py-1 rounded font-semibold">
+              C2: {obsCounts.C2}
+            </span>
+          )}
+          {obsCounts.C3 > 0 && (
+            <span className="cv-code-c3 text-xs px-2 py-1 rounded font-semibold">
+              C3: {obsCounts.C3}
+            </span>
+          )}
+          {obsCounts.FI > 0 && (
+            <span className="cv-code-fi text-xs px-2 py-1 rounded font-semibold">
+              FI: {obsCounts.FI}
+            </span>
+          )}
+          {hasUnsatisfactory && (
+            <span className="cv-badge-fail text-[10px] ml-auto">UNSATISFACTORY</span>
           )}
         </div>
       )}
 
-      {certificate?.circuits && certificate.circuits.length > 0 ? (
-        <div className="space-y-3">
-          {certificate.circuits.filter((c) => !c.dbReference || c.dbReference === certificate.distributionBoards?.[activeDBIndex]?.reference).map((circuit, index) => (
-            <div key={circuit.id} className="cv-panel hover:border-accent/50 transition-colors">
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="cv-badge bg-surface-2 text-text font-mono">Cct {circuit.circuitNumber || index + 1}</span>
-                    <span className="font-medium text-text">{circuit.description}</span>
-                  </div>
-                  <div className="text-sm text-text-muted mt-1">
-                    {circuit.location && <span>{circuit.location} • </span>}
-                    {circuit.ocpdType}{circuit.ocpdRating}A
-                    {circuit.zs && <span> • Zs: {circuit.zs}Ω</span>}
-                  </div>
-                  {circuit.status && (
-                    <span className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${circuit.status === 'satisfactory' ? 'text-green-500' : 'text-amber-500'}`}>
-                      {circuit.status === 'satisfactory' ? <><Check className="w-3 h-3" /> Satisfactory</> : <><AlertTriangle className="w-3 h-3" /> {circuit.status}</>}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  <button type="button" onClick={() => setCaptureMode({ type: 'circuit', editingId: circuit.id })} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted" aria-label="Edit circuit"><Edit3 className="w-4 h-4" /></button>
-                  <button type="button" onClick={() => handleCircuitDelete(circuit.id)} className="p-2 rounded-lg hover:bg-red-500/10 text-text-muted hover:text-red-500" aria-label="Delete circuit"><Trash2 className="w-4 h-4" /></button>
-                </div>
-              </div>
-            </div>
-          ))}
+      {/* Observation list */}
+      {observations.length === 0 ? (
+        <div className="cv-panel text-center py-8">
+          <AlertTriangle className="w-6 h-6 text-certvoice-muted/40 mx-auto mb-2" />
+          <p className="text-xs text-certvoice-muted">No observations recorded</p>
+          <p className="text-[10px] text-certvoice-muted/60 mt-1">
+            Voice-capture defects to add them
+          </p>
         </div>
       ) : (
-        <div className="cv-panel text-center py-8">
-          <CircleDot className="w-12 h-12 mx-auto text-text-muted mb-3" />
-          <h3 className="font-semibold text-text mb-1">No Circuits Recorded</h3>
-          <p className="text-sm text-text-muted mb-4">Use voice capture to quickly record circuit test results</p>
-        </div>
-      )}
-
-      {captureMode.type === 'idle' && (
-        <button type="button" onClick={() => setCaptureMode({ type: 'circuit' })} className="cv-btn-primary w-full flex items-center justify-center gap-2">
-          <Mic className="w-5 h-5" />Record Circuit Test Results
-        </button>
-      )}
-
-      {captureMode.type === 'circuit' && (
-        <div className="fixed inset-0 z-50 bg-bg/95 overflow-y-auto">
-          <div className="min-h-screen p-4">
-            <div className="max-w-2xl mx-auto">
-              <CircuitRecorder
-                dbReference={certificate?.distributionBoards?.[activeDBIndex]?.reference || 'DB1'}
-                existingCircuit={captureMode.editingId ? certificate?.circuits?.find((c) => c.id === captureMode.editingId) : undefined}
-                onConfirm={(circuit) => {
-                  if (captureMode.editingId) {
-                    handleCircuitUpdate(captureMode.editingId, circuit)
-                  } else {
-                    handleCircuitAdd({ ...circuit, id: crypto.randomUUID(), dbReference: certificate?.distributionBoards?.[activeDBIndex]?.reference || 'DB1' })
-                  }
-                }}
-                onCancel={() => setCaptureMode({ type: 'idle' })}
-              />
+        observations.map((obs, idx) => (
+          <button
+            key={`obs-${obs.itemNumber}-${idx}`}
+            type="button"
+            onClick={() => {
+              setEditingObsIndex(idx)
+              setShowObservationRecorder(true)
+            }}
+            className="cv-panel w-full text-left p-3 hover:border-certvoice-accent/50 transition-colors"
+          >
+            <div className="flex items-start gap-2">
+              <span
+                className={`text-[10px] font-bold px-2 py-0.5 rounded shrink-0 mt-0.5 ${
+                  obs.classificationCode === 'C1'
+                    ? 'cv-code-c1'
+                    : obs.classificationCode === 'C2'
+                      ? 'cv-code-c2'
+                      : obs.classificationCode === 'C3'
+                        ? 'cv-code-c3'
+                        : 'cv-code-fi'
+                }`}
+              >
+                {obs.classificationCode}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs text-certvoice-text line-clamp-2">
+                  {obs.observationText ?? ''}
+                </div>
+                {obs.regulationReference && (
+                  <div className="text-[10px] text-certvoice-muted mt-1 font-mono">
+                    {obs.regulationReference}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        </div>
+          </button>
+        ))
+      )}
+
+      {/* Add observation button */}
+      <button
+        type="button"
+        onClick={() => {
+          setEditingObsIndex(null)
+          setShowObservationRecorder(true)
+        }}
+        className="cv-btn-primary w-full flex items-center justify-center gap-2"
+      >
+        <Plus className="w-4 h-4" />
+        Record Observation
+      </button>
+
+      {/* Observation Recorder */}
+      {showObservationRecorder && (
+        <ObservationRecorder
+          locationContext={activeBoard?.dbLocation ?? ''}
+          dbContext={activeBoard?.dbReference ?? 'DB1'}
+          nextItemNumber={observations.length + 1}
+          earthingType={earthingType}
+          existingCircuits={boardCircuits.map((c) => c.circuitNumber ?? '')}
+          onObservationConfirmed={handleObservationConfirmed}
+          onCancel={() => {
+            setShowObservationRecorder(false)
+            setEditingObsIndex(null)
+          }}
+        />
       )}
     </div>
   )
 
-  // Render Observations Tab
-  const renderObservationsTab = () => (
-    <div className="space-y-4">
-      {observationCount > 0 && (
-        <div className="grid grid-cols-4 gap-2">
-          {(['C1', 'C2', 'C3', 'FI'] as const).map((code) => (
-            <div key={code} className={`cv-panel text-center py-3 ${code === 'C1' ? 'cv-code-c1' : ''} ${code === 'C2' ? 'cv-code-c2' : ''} ${code === 'C3' ? 'cv-code-c3' : ''} ${code === 'FI' ? 'cv-code-fi' : ''}`}>
-              <div className="text-2xl font-bold">{observationsByCode[code]}</div>
-              <div className="text-xs opacity-80">{code}</div>
-            </div>
-          ))}
-        </div>
-      )}
+  // ============================================================
+  // RENDER: SUPPLY TAB
+  // ============================================================
 
-      {certificate?.observations && certificate.observations.length > 0 ? (
-        <div className="space-y-3">
-          {certificate.observations.map((obs, index) => (
-            <div key={obs.id} className={`cv-panel ${obs.classification === 'C1' ? 'border-red-500/50 bg-red-500/5' : ''} ${obs.classification === 'C2' ? 'border-amber-500/50 bg-amber-500/5' : ''}`}>
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className={`cv-badge font-semibold ${obs.classification === 'C1' ? 'cv-code-c1' : ''} ${obs.classification === 'C2' ? 'cv-code-c2' : ''} ${obs.classification === 'C3' ? 'cv-code-c3' : ''} ${obs.classification === 'FI' ? 'cv-code-fi' : ''}`}>{obs.classification}</span>
-                    <span className="text-sm text-text-muted">Item {index + 1}</span>
-                  </div>
-                  <p className="text-text">{obs.description}</p>
-                  {obs.location && <p className="text-sm text-text-muted mt-1">Location: {obs.location}</p>}
-                  {obs.regulation && <p className="text-xs text-text-muted mt-1 font-mono">Reg: {obs.regulation}</p>}
-                </div>
-                <div className="flex items-center gap-1">
-                  <button type="button" onClick={() => setCaptureMode({ type: 'observation', editingId: obs.id })} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted" aria-label="Edit"><Edit3 className="w-4 h-4" /></button>
-                  <button type="button" onClick={() => handleObservationDelete(obs.id)} className="p-2 rounded-lg hover:bg-red-500/10 text-text-muted hover:text-red-500" aria-label="Delete"><Trash2 className="w-4 h-4" /></button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="cv-panel text-center py-8">
-          <AlertTriangle className="w-12 h-12 mx-auto text-text-muted mb-3" />
-          <h3 className="font-semibold text-text mb-1">No Observations Recorded</h3>
-          <p className="text-sm text-text-muted mb-4">Record defects and non-compliances found during inspection</p>
-        </div>
-      )}
-
-      {captureMode.type === 'idle' && (
-        <button type="button" onClick={() => setCaptureMode({ type: 'observation' })} className="cv-btn-primary w-full flex items-center justify-center gap-2">
-          <Mic className="w-5 h-5" />Record Observation
-        </button>
-      )}
-
-      {captureMode.type === 'observation' && (
-        <div className="fixed inset-0 z-50 bg-bg/95 overflow-y-auto">
-          <div className="min-h-screen p-4">
-            <div className="max-w-2xl mx-auto">
-              <ObservationRecorder
-                existingObservation={captureMode.editingId ? certificate?.observations?.find((o) => o.id === captureMode.editingId) : undefined}
-                dbReference={certificate?.distributionBoards?.[activeDBIndex]?.reference}
-                onConfirm={(observation) => {
-                  if (captureMode.editingId) {
-                    handleObservationUpdate(captureMode.editingId, observation)
-                  } else {
-                    handleObservationAdd({ ...observation, id: crypto.randomUUID(), itemNumber: (certificate?.observations?.length || 0) + 1 })
-                  }
-                }}
-                onCancel={() => setCaptureMode({ type: 'idle' })}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+  const renderSupplyTab = () => (
+    <SupplyDetails
+      supply={supply}
+      particulars={particulars}
+      onSupplyChange={handleSupplyChange}
+      onParticularsChange={handleParticularsChange}
+    />
   )
 
-  // Render Active Tab
-  const renderActiveTab = () => {
-    switch (activeTab) {
-      case 'supply':
-        return <SupplyDetails initialSupply={certificate?.supplyCharacteristics} initialParticulars={certificate?.installationParticulars} onUpdate={handleSupplyUpdate} />
-      case 'circuits':
-        return renderCircuitsTab()
-      case 'observations':
-        return renderObservationsTab()
-      case 'checklist':
-        return <InspectionChecklist items={certificate?.inspectionSchedule || []} onUpdate={handleChecklistUpdate} />
-      default:
-        return null
-    }
+  // ============================================================
+  // RENDER: CHECKLIST TAB
+  // ============================================================
+
+  const renderChecklistTab = () => (
+    <InspectionChecklist
+      items={inspectionItems}
+      onItemChange={handleItemChange}
+      onBulkPass={handleBulkPass}
+    />
+  )
+
+  // ============================================================
+  // RENDER: MAIN
+  // ============================================================
+
+  const tabRenderers: Record<CaptureTab, () => JSX.Element> = {
+    circuits: renderCircuitsTab,
+    observations: renderObservationsTab,
+    supply: renderSupplyTab,
+    checklist: renderChecklistTab,
   }
 
-  // Loading
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-bg flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-text-muted">Loading inspection...</p>
-        </div>
-      </div>
-    )
-  }
+  const address = certificate.installationDetails?.installationAddress ?? 'New Inspection'
 
-  // Main Render
   return (
     <>
       <Helmet>
-        <title>{certificate?.sectionC?.installationAddress ? `Inspection - ${certificate.sectionC.installationAddress.split('\n')[0]}` : 'Inspection Capture'} | CertVoice</title>
+        <title>Inspection | CertVoice</title>
+        <meta name="description" content="EICR inspection capture" />
       </Helmet>
 
-      <div className="min-h-screen bg-bg pb-24">
-        <header className="bg-surface border-b border-border sticky top-0 z-40">
-          <div className="px-4 py-3 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <button type="button" onClick={handleSaveAndExit} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted" aria-label="Save and exit">
-                <ArrowLeft className="w-5 h-5" />
+      <div className="max-w-lg mx-auto px-4 py-4 space-y-4">
+        {/* ---- Header ---- */}
+        <div className="flex items-center gap-3">
+          <Link
+            to="/"
+            className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
+                       text-certvoice-muted hover:text-certvoice-text hover:border-certvoice-muted transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </Link>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-sm font-bold text-certvoice-text truncate flex items-center gap-2">
+              <Zap className="w-4 h-4 text-certvoice-accent shrink-0" />
+              {address}
+            </h1>
+            <p className="text-[10px] text-certvoice-muted">
+              {certificate.reportNumber} ·{' '}
+              {certificate.installationDetails?.installationAddress
+                ? certificate.clientDetails?.clientName ?? ''
+                : ''}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleSave}
+            className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
+                       text-certvoice-muted hover:text-certvoice-green hover:border-certvoice-green transition-colors"
+            title="Save progress"
+          >
+            <Save className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* ---- Overall Status ---- */}
+        {hasUnsatisfactory && (
+          <div className="cv-panel border-certvoice-red/30 bg-certvoice-red/5 p-3 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-certvoice-red shrink-0" />
+            <span className="text-xs text-certvoice-red font-semibold">
+              UNSATISFACTORY — C1/C2/FI observations recorded
+            </span>
+          </div>
+        )}
+
+        {/* ---- Tabs ---- */}
+        <div className="flex gap-1 bg-certvoice-surface border border-certvoice-border rounded-lg p-1">
+          {TABS.map((tab) => {
+            const TabIcon = tab.icon
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-md text-xs font-semibold transition-colors ${
+                  activeTab === tab.id
+                    ? 'bg-certvoice-accent text-white'
+                    : 'text-certvoice-muted hover:text-certvoice-text'
+                }`}
+              >
+                <TabIcon className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{tab.label}</span>
+                {tab.count !== undefined && tab.count > 0 && (
+                  <span
+                    className={`text-[9px] min-w-[16px] h-4 rounded-full flex items-center justify-center ${
+                      activeTab === tab.id
+                        ? 'bg-white/20 text-white'
+                        : 'bg-certvoice-surface-2 text-certvoice-muted'
+                    }`}
+                  >
+                    {tab.count}
+                  </span>
+                )}
               </button>
-              <div className="min-w-0">
-                <h1 className="font-semibold text-text truncate">{certificate?.sectionC?.installationAddress?.split('\n')[0] || 'New Inspection'}</h1>
-                <div className="flex items-center gap-2 text-xs text-text-muted">
-                  <span>{certificate?.reportNumber || 'Draft'}</span>
-                  {lastSaved && <><span>•</span><span>Saved {lastSaved.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</span></>}
-                  {hasUnsavedChanges && <span className="text-amber-500">• Unsaved changes</span>}
-                </div>
-              </div>
-            </div>
-            <button type="button" onClick={() => setShowMenu(!showMenu)} className="p-2 rounded-lg hover:bg-surface-2 text-text-muted" aria-label="Menu">
-              <MoreVertical className="w-5 h-5" />
-            </button>
-          </div>
-          {renderTabBar()}
-          {showMenu && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowMenu(false)} />
-              <div className="absolute right-4 top-14 z-50 w-56 bg-surface border border-border rounded-lg shadow-xl py-1">
-                <button type="button" onClick={() => { setShowMenu(false); handleProceedToReview() }} className="w-full px-4 py-2 text-left text-sm hover:bg-surface-2 flex items-center gap-2">
-                  <Eye className="w-4 h-4" />Review Certificate
-                </button>
-                <button type="button" onClick={() => setShowMenu(false)} className="w-full px-4 py-2 text-left text-sm hover:bg-surface-2 flex items-center gap-2">
-                  <Camera className="w-4 h-4" />Add Photo Evidence
-                </button>
-                <hr className="my-1 border-border" />
-                <button type="button" onClick={() => { setShowMenu(false); handleSaveAndExit() }} className="w-full px-4 py-2 text-left text-sm hover:bg-surface-2 flex items-center gap-2">
-                  <Save className="w-4 h-4" />Save & Exit
-                </button>
-              </div>
-            </>
-          )}
-        </header>
+            )
+          })}
+        </div>
 
-        <main className="max-w-4xl mx-auto px-4 py-6">{renderActiveTab()}</main>
-
-        <footer className="fixed bottom-0 left-0 right-0 bg-surface border-t border-border">
-          <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-            <div className="text-sm text-text-muted">
-              <span className="font-medium text-text">{circuitCount}</span> circuits • <span className="font-medium text-text">{observationCount}</span> observations
-            </div>
-            <button type="button" onClick={handleProceedToReview} className="cv-btn-primary flex items-center gap-2">
-              <ClipboardCheck className="w-4 h-4" />Review Certificate
-            </button>
-          </div>
-        </footer>
+        {/* ---- Tab Content ---- */}
+        <div>{tabRenderers[activeTab]()}</div>
       </div>
     </>
   )
