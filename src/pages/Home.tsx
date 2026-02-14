@@ -1,63 +1,205 @@
-// ============================================================
-// src/pages/Home.tsx
-// CertVoice - Dashboard Home Page
-// Phase 3: Certificate Assembly - Item #30
-// ============================================================
+/**
+ * CertVoice — Home Page (Dashboard)
+ *
+ * Shows recent certificates, jobs in progress, and quick actions.
+ * Uses correct EICRCertificate type structure from eicr.ts.
+ *
+ * @module pages/Home
+ */
 
-import { useState, useEffect, useMemo } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useState, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { Helmet } from 'react-helmet-async'
 import {
+  Zap,
   Plus,
   FileText,
   Clock,
-  CheckCircle,
-  AlertTriangle,
+  CheckCircle2,
   ChevronRight,
   Search,
-  Filter,
-  Calendar,
-  MapPin,
-  Zap,
-  BarChart3,
-  Settings,
-  HelpCircle,
   Mic,
 } from 'lucide-react'
+import type {
+  EICRCertificate,
+  CertificateStatus,
+  ClassificationCode,
+} from '../types/eicr'
 import { captureError } from '../utils/errorTracking'
-import type { EICRCertificate } from '../types/eicr'
 
 // ============================================================
 // TYPES
 // ============================================================
 
-interface CertificateSummary {
-  id: string
-  reportNumber: string
-  status: 'draft' | 'complete' | 'submitted'
-  address: string
-  clientName: string
-  inspectionDate: string
-  circuitCount: number
-  observationCount: number
-  hasC1OrC2: boolean
-  updatedAt: string
-}
-
-interface DashboardStats {
-  drafts: number
-  completedThisMonth: number
-  avgTimePerInspection: string
-}
+type StatusFilter = 'ALL' | CertificateStatus
 
 // ============================================================
-// MOCK DATA (Replace with real data fetching)
+// MOCK DATA (replace with API calls in Phase 6)
 // ============================================================
 
-const MOCK_STATS: DashboardStats = {
-  drafts: 2,
-  completedThisMonth: 12,
-  avgTimePerInspection: '1.5 hrs',
+const MOCK_CERTIFICATES: Partial<EICRCertificate>[] = [
+  {
+    id: 'cert-001',
+    reportNumber: 'CV-LQ1R8K',
+    status: 'IN_PROGRESS',
+    clientDetails: {
+      clientName: 'Mr J Smith',
+      clientAddress: '42 Maple Drive, Truro TR1 3BQ',
+    },
+    installationDetails: {
+      installationAddress: '42 Maple Drive, Truro TR1 3BQ',
+      occupier: 'Mrs J Smith',
+      premisesType: 'DOMESTIC',
+      estimatedAgeOfWiring: 20,
+      evidenceOfAdditions: true,
+      additionsEstimatedAge: 5,
+      installationRecordsAvailable: false,
+      dateOfLastInspection: '2019-03-15',
+    },
+    reportReason: {
+      purpose: 'PERIODIC',
+      inspectionDates: ['2026-02-14'],
+    },
+    circuits: [],
+    observations: [
+      {
+        itemNumber: 1,
+        observationText: 'Supply tails not adequately supported',
+        classificationCode: 'C2',
+        dbReference: 'DB1',
+        location: 'Main intake',
+        regulationReference: 'Reg 522.8.5',
+      },
+    ],
+    createdAt: '2026-02-14T09:30:00Z',
+    updatedAt: '2026-02-14T14:22:00Z',
+  },
+  {
+    id: 'cert-002',
+    reportNumber: 'CV-KP9M3N',
+    status: 'COMPLETED',
+    clientDetails: {
+      clientName: 'Acme Properties Ltd',
+      clientAddress: '10 High Street, Falmouth TR11 2AF',
+    },
+    installationDetails: {
+      installationAddress: '15 Beach Road, Falmouth TR11 4NX',
+      occupier: 'Mr D Jones',
+      premisesType: 'DOMESTIC',
+      estimatedAgeOfWiring: 35,
+      evidenceOfAdditions: false,
+      additionsEstimatedAge: null,
+      installationRecordsAvailable: true,
+      dateOfLastInspection: '2021-06-10',
+    },
+    reportReason: {
+      purpose: 'CHANGE_OF_OCCUPANCY',
+      inspectionDates: ['2026-02-10'],
+    },
+    circuits: [],
+    observations: [],
+    createdAt: '2026-02-10T08:00:00Z',
+    updatedAt: '2026-02-10T16:45:00Z',
+  },
+  {
+    id: 'cert-003',
+    reportNumber: 'CV-JN7X2P',
+    status: 'DRAFT',
+    clientDetails: {
+      clientName: 'Cornwall Housing',
+      clientAddress: '23 Lemon Street, Truro TR1 2LS',
+    },
+    installationDetails: {
+      installationAddress: '8 Trelawney Road, Redruth TR15 1AB',
+      occupier: '',
+      premisesType: 'DOMESTIC',
+      estimatedAgeOfWiring: null,
+      evidenceOfAdditions: false,
+      additionsEstimatedAge: null,
+      installationRecordsAvailable: false,
+      dateOfLastInspection: null,
+    },
+    reportReason: {
+      purpose: 'PERIODIC',
+      inspectionDates: ['2026-02-15'],
+    },
+    circuits: [],
+    observations: [],
+    createdAt: '2026-02-13T17:00:00Z',
+    updatedAt: '2026-02-13T17:05:00Z',
+  },
+]
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+function getStatusConfig(status: CertificateStatus) {
+  switch (status) {
+    case 'DRAFT':
+      return {
+        label: 'Draft',
+        badgeClass: 'cv-badge-warning',
+        icon: FileText,
+      }
+    case 'IN_PROGRESS':
+      return {
+        label: 'In Progress',
+        badgeClass: 'cv-badge-pass',
+        icon: Clock,
+      }
+    case 'COMPLETED':
+      return {
+        label: 'Completed',
+        badgeClass: 'cv-badge-pass',
+        icon: CheckCircle2,
+      }
+    case 'SUBMITTED':
+      return {
+        label: 'Submitted',
+        badgeClass: 'cv-badge-pass',
+        icon: CheckCircle2,
+      }
+    default:
+      return {
+        label: status,
+        badgeClass: 'cv-badge-warning',
+        icon: FileText,
+      }
+  }
+}
+
+function countObservationsByCode(
+  observations: EICRCertificate['observations'],
+  code: ClassificationCode
+): number {
+  return observations.filter((o) => o.classificationCode === code).length
+}
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    })
+  } catch {
+    return iso
+  }
+}
+
+function formatTimeAgo(iso: string): string {
+  try {
+    const diff = Date.now() - new Date(iso).getTime()
+    const hours = Math.floor(diff / (1000 * 60 * 60))
+    if (hours < 1) return 'Just now'
+    if (hours < 24) return `${hours}h ago`
+    const days = Math.floor(hours / 24)
+    if (days === 1) return 'Yesterday'
+    return `${days}d ago`
+  } catch {
+    return ''
+  }
 }
 
 // ============================================================
@@ -65,485 +207,277 @@ const MOCK_STATS: DashboardStats = {
 // ============================================================
 
 export default function Home() {
-  const navigate = useNavigate()
-  
-  // State
-  const [certificates, setCertificates] = useState<CertificateSummary[]>([])
-  const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
-  const [filterStatus, setFilterStatus] = useState<'all' | 'draft' | 'complete'>('all')
-  const [stats, setStats] = useState<DashboardStats>(MOCK_STATS)
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL')
 
-  // Load certificates
-  useEffect(() => {
-    const loadCertificates = async () => {
-      setIsLoading(true)
-      try {
-        // Check for drafts in sessionStorage
-        const drafts: CertificateSummary[] = []
-        
-        const draftCert = sessionStorage.getItem('certvoice_draft_certificate')
-        if (draftCert) {
-          try {
-            const parsed = JSON.parse(draftCert) as Partial<EICRCertificate>
-            drafts.push({
-              id: parsed.id || 'draft-1',
-              reportNumber: parsed.reportNumber || 'Draft',
-              status: 'draft',
-              address: parsed.sectionC?.installationAddress?.split('\n')[0] || 'New Inspection',
-              clientName: parsed.sectionA?.clientName || 'Unknown Client',
-              inspectionDate: parsed.sectionB?.inspectionDate || new Date().toISOString().split('T')[0],
-              circuitCount: parsed.circuits?.length || 0,
-              observationCount: parsed.observations?.length || 0,
-              hasC1OrC2: parsed.observations?.some((o) => o.classification === 'C1' || o.classification === 'C2') || false,
-              updatedAt: parsed.updatedAt || new Date().toISOString(),
-            })
-          } catch {
-            // Invalid draft, ignore
-          }
-        }
+  // --- Filtered certificates ---
+  const filteredCerts = useMemo(() => {
+    try {
+      let results = [...MOCK_CERTIFICATES]
 
-        // TODO: Load from backend
-        // For now, use mock data plus any drafts
-        const mockCompleted: CertificateSummary[] = [
-          {
-            id: 'cert-001',
-            reportNumber: 'EICR-2026-001',
-            status: 'complete',
-            address: '15 Oak Avenue, Truro',
-            clientName: 'Mrs J Williams',
-            inspectionDate: '2026-02-10',
-            circuitCount: 12,
-            observationCount: 2,
-            hasC1OrC2: false,
-            updatedAt: '2026-02-10T16:30:00Z',
-          },
-          {
-            id: 'cert-002',
-            reportNumber: 'EICR-2026-002',
-            status: 'complete',
-            address: '8 High Street, Falmouth',
-            clientName: 'ABC Lettings Ltd',
-            inspectionDate: '2026-02-08',
-            circuitCount: 8,
-            observationCount: 3,
-            hasC1OrC2: true,
-            updatedAt: '2026-02-08T14:15:00Z',
-          },
-          {
-            id: 'cert-003',
-            reportNumber: 'EICR-2026-003',
-            status: 'complete',
-            address: '42 Maple Drive, Truro',
-            clientName: 'Mr S Patel',
-            inspectionDate: '2026-02-05',
-            circuitCount: 14,
-            observationCount: 0,
-            hasC1OrC2: false,
-            updatedAt: '2026-02-05T11:45:00Z',
-          },
-        ]
-
-        setCertificates([...drafts, ...mockCompleted])
-        setStats({
-          drafts: drafts.length,
-          completedThisMonth: mockCompleted.length,
-          avgTimePerInspection: '1.5 hrs',
-        })
-      } catch (error) {
-        captureError(error, 'Home.loadCertificates')
-      } finally {
-        setIsLoading(false)
+      // Status filter
+      if (statusFilter !== 'ALL') {
+        results = results.filter((c) => c.status === statusFilter)
       }
-    }
 
-    loadCertificates()
+      // Search filter
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase()
+        results = results.filter((c) => {
+          const address = c.installationDetails?.installationAddress?.toLowerCase() ?? ''
+          const client = c.clientDetails?.clientName?.toLowerCase() ?? ''
+          const report = c.reportNumber?.toLowerCase() ?? ''
+          return address.includes(q) || client.includes(q) || report.includes(q)
+        })
+      }
+
+      // Sort by updatedAt descending
+      results.sort((a, b) => {
+        const da = a.updatedAt ? new Date(a.updatedAt).getTime() : 0
+        const db = b.updatedAt ? new Date(b.updatedAt).getTime() : 0
+        return db - da
+      })
+
+      return results
+    } catch (error) {
+      captureError(error, 'Home.filteredCerts')
+      return []
+    }
+  }, [searchQuery, statusFilter])
+
+  // --- Stats ---
+  const stats = useMemo(() => {
+    const all = MOCK_CERTIFICATES
+    return {
+      total: all.length,
+      inProgress: all.filter((c) => c.status === 'IN_PROGRESS').length,
+      drafts: all.filter((c) => c.status === 'DRAFT').length,
+      completed: all.filter((c) => c.status === 'COMPLETED').length,
+    }
   }, [])
 
-  // Filtered certificates
-  const filteredCertificates = useMemo(() => {
-    return certificates.filter((cert) => {
-      // Status filter
-      if (filterStatus !== 'all' && cert.status !== filterStatus) return false
-      
-      // Search filter
-      if (searchQuery) {
-        const query = searchQuery.toLowerCase()
-        return (
-          cert.address.toLowerCase().includes(query) ||
-          cert.clientName.toLowerCase().includes(query) ||
-          cert.reportNumber.toLowerCase().includes(query)
-        )
-      }
-      
-      return true
-    })
-  }, [certificates, filterStatus, searchQuery])
-
-  // Format date for display
-  const formatDate = (dateStr: string): string => {
-    try {
-      const date = new Date(dateStr)
-      const now = new Date()
-      const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24))
-      
-      if (diffDays === 0) return 'Today'
-      if (diffDays === 1) return 'Yesterday'
-      if (diffDays < 7) return `${diffDays} days ago`
-      
-      return date.toLocaleDateString('en-GB', {
-        day: 'numeric',
-        month: 'short',
-        year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
-      })
-    } catch {
-      return dateStr
-    }
-  }
-
-  // Handle new inspection
-  const handleNewInspection = () => {
-    navigate('/inspection/new')
-  }
-
-  // Handle continue draft
-  const handleContinueDraft = (certId: string) => {
-    navigate(`/inspection/${certId}/capture`)
-  }
-
-  // Handle view certificate
-  const handleViewCertificate = (certId: string, status: string) => {
-    if (status === 'draft') {
-      navigate(`/inspection/${certId}/capture`)
-    } else {
-      navigate(`/inspection/${certId}/review`)
-    }
-  }
-
-  // ============================================================
-  // RENDER
-  // ============================================================
+  // --- Filter tabs ---
+  const FILTERS: { value: StatusFilter; label: string; count: number }[] = [
+    { value: 'ALL', label: 'All', count: stats.total },
+    { value: 'IN_PROGRESS', label: 'Active', count: stats.inProgress },
+    { value: 'DRAFT', label: 'Drafts', count: stats.drafts },
+    { value: 'COMPLETED', label: 'Done', count: stats.completed },
+  ]
 
   return (
     <>
       <Helmet>
         <title>Dashboard | CertVoice</title>
-        <meta name="description" content="CertVoice dashboard - manage your EICR electrical inspection certificates" />
+        <meta
+          name="description"
+          content="CertVoice dashboard — manage your EICR certificates"
+        />
       </Helmet>
 
-      <div className="min-h-screen bg-bg">
-        {/* Header */}
-        <header className="bg-surface border-b border-border sticky top-0 z-40">
-          <div className="max-w-6xl mx-auto px-4 py-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-accent flex items-center justify-center">
-                  <Zap className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <h1 className="font-bold text-xl text-text">CertVoice</h1>
-                  <p className="text-xs text-text-muted">EICR Certificates</p>
-                </div>
-              </div>
-              
-              <div className="flex items-center gap-2">
-                <Link
-                  to="/settings"
-                  className="p-2 rounded-lg hover:bg-surface-2 text-text-muted"
-                  aria-label="Settings"
-                >
-                  <Settings className="w-5 h-5" />
-                </Link>
-                <Link
-                  to="/help"
-                  className="p-2 rounded-lg hover:bg-surface-2 text-text-muted"
-                  aria-label="Help"
-                >
-                  <HelpCircle className="w-5 h-5" />
-                </Link>
-              </div>
+      <div className="max-w-lg mx-auto px-4 py-6 space-y-5">
+        {/* ---- Header ---- */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-bold text-certvoice-text flex items-center gap-2">
+              <Zap className="w-5 h-5 text-certvoice-accent" />
+              CertVoice
+            </h1>
+            <p className="text-xs text-certvoice-muted mt-0.5">
+              Voice-first EICR certificates
+            </p>
+          </div>
+          <Link
+            to="/inspection/new"
+            className="cv-btn-primary flex items-center gap-2 px-4 py-2.5 text-sm"
+          >
+            <Plus className="w-4 h-4" />
+            New EICR
+          </Link>
+        </div>
+
+        {/* ---- Quick Stats ---- */}
+        <div className="grid grid-cols-3 gap-2">
+          <div className="cv-panel text-center py-3">
+            <div className="text-xl font-bold text-certvoice-accent font-mono">
+              {stats.inProgress}
+            </div>
+            <div className="text-[10px] text-certvoice-muted uppercase tracking-wider mt-0.5">
+              Active
             </div>
           </div>
-        </header>
+          <div className="cv-panel text-center py-3">
+            <div className="text-xl font-bold text-certvoice-amber font-mono">
+              {stats.drafts}
+            </div>
+            <div className="text-[10px] text-certvoice-muted uppercase tracking-wider mt-0.5">
+              Drafts
+            </div>
+          </div>
+          <div className="cv-panel text-center py-3">
+            <div className="text-xl font-bold text-certvoice-green font-mono">
+              {stats.completed}
+            </div>
+            <div className="text-[10px] text-certvoice-muted uppercase tracking-wider mt-0.5">
+              Completed
+            </div>
+          </div>
+        </div>
 
-        <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
-          {/* Quick Actions */}
-          <section>
+        {/* ---- Voice Shortcut ---- */}
+        <Link
+          to="/inspection/new"
+          className="cv-panel flex items-center gap-4 p-4 border-certvoice-accent/30
+                     hover:border-certvoice-accent transition-colors cursor-pointer"
+        >
+          <div
+            className="w-12 h-12 rounded-full bg-certvoice-accent/15 border-2 border-certvoice-accent
+                        flex items-center justify-center shrink-0"
+          >
+            <Mic className="w-5 h-5 text-certvoice-accent" />
+          </div>
+          <div>
+            <div className="text-sm font-semibold text-certvoice-text">
+              Start voice capture
+            </div>
+            <div className="text-xs text-certvoice-muted mt-0.5">
+              Speak your findings — AI extracts the fields
+            </div>
+          </div>
+          <ChevronRight className="w-4 h-4 text-certvoice-muted ml-auto shrink-0" />
+        </Link>
+
+        {/* ---- Search ---- */}
+        <div className="relative">
+          <Search className="w-4 h-4 text-certvoice-muted absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search by address, client, or report no."
+            className="w-full bg-certvoice-surface border border-certvoice-border rounded-lg
+                       pl-9 pr-3 py-2.5 text-sm text-certvoice-text
+                       placeholder:text-certvoice-muted/50 outline-none
+                       focus:border-certvoice-accent transition-colors"
+          />
+        </div>
+
+        {/* ---- Filter Tabs ---- */}
+        <div className="flex gap-1 bg-certvoice-surface border border-certvoice-border rounded-lg p-1">
+          {FILTERS.map((f) => (
             <button
+              key={f.value}
               type="button"
-              onClick={handleNewInspection}
-              className="w-full cv-panel bg-gradient-to-r from-accent to-accent/80 border-accent hover:from-accent/90 hover:to-accent/70 transition-all"
+              onClick={() => setStatusFilter(f.value)}
+              className={`flex-1 px-2 py-2 rounded-md text-xs font-semibold transition-colors ${
+                statusFilter === f.value
+                  ? 'bg-certvoice-accent text-white'
+                  : 'text-certvoice-muted hover:text-certvoice-text'
+              }`}
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-xl bg-white/20 flex items-center justify-center">
-                    <Plus className="w-8 h-8 text-white" />
-                  </div>
-                  <div className="text-left">
-                    <h2 className="text-lg font-semibold text-white">New EICR Inspection</h2>
-                    <p className="text-sm text-white/80">Start a new certificate with voice capture</p>
-                  </div>
-                </div>
-                <ChevronRight className="w-6 h-6 text-white/60" />
-              </div>
+              {f.label}
+              <span className="ml-1 opacity-70">{f.count}</span>
             </button>
-          </section>
+          ))}
+        </div>
 
-          {/* Stats */}
-          <section className="grid grid-cols-3 gap-3">
-            <div className="cv-panel text-center">
-              <div className="text-2xl font-bold text-amber-500">{stats.drafts}</div>
-              <div className="text-xs text-text-muted mt-1">Drafts</div>
-            </div>
-            <div className="cv-panel text-center">
-              <div className="text-2xl font-bold text-green-500">{stats.completedThisMonth}</div>
-              <div className="text-xs text-text-muted mt-1">This Month</div>
-            </div>
-            <div className="cv-panel text-center">
-              <div className="text-2xl font-bold text-accent">{stats.avgTimePerInspection}</div>
-              <div className="text-xs text-text-muted mt-1">Avg Time</div>
-            </div>
-          </section>
-
-          {/* Drafts Section */}
-          {certificates.filter((c) => c.status === 'draft').length > 0 && (
-            <section>
-              <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3 flex items-center gap-2">
-                <Clock className="w-4 h-4" />
-                Continue Where You Left Off
-              </h2>
-              <div className="space-y-3">
-                {certificates
-                  .filter((c) => c.status === 'draft')
-                  .map((cert) => (
-                    <button
-                      key={cert.id}
-                      type="button"
-                      onClick={() => handleContinueDraft(cert.id)}
-                      className="w-full cv-panel hover:border-accent/50 transition-colors text-left"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-lg bg-amber-500/20 flex items-center justify-center">
-                            <FileText className="w-5 h-5 text-amber-500" />
-                          </div>
-                          <div>
-                            <div className="font-medium text-text">{cert.address}</div>
-                            <div className="text-sm text-text-muted">
-                              {cert.circuitCount} circuits • {cert.observationCount} observations
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="cv-badge bg-amber-500/20 text-amber-500">Draft</span>
-                          <ChevronRight className="w-5 h-5 text-text-muted" />
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-              </div>
-            </section>
-          )}
-
-          {/* All Certificates */}
-          <section>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide flex items-center gap-2">
-                <FileText className="w-4 h-4" />
-                Recent Certificates
-              </h2>
+        {/* ---- Certificate List ---- */}
+        <div className="space-y-2">
+          {filteredCerts.length === 0 ? (
+            <div className="cv-panel text-center py-10">
+              <FileText className="w-8 h-8 text-certvoice-muted/40 mx-auto mb-2" />
+              <p className="text-sm text-certvoice-muted">
+                {searchQuery
+                  ? 'No certificates match your search'
+                  : 'No certificates yet'}
+              </p>
               <Link
-                to="/certificates"
-                className="text-sm text-accent hover:underline flex items-center gap-1"
+                to="/inspection/new"
+                className="text-xs text-certvoice-accent hover:underline mt-2 inline-block"
               >
-                View All
-                <ChevronRight className="w-4 h-4" />
+                Start your first inspection
               </Link>
             </div>
+          ) : (
+            filteredCerts.map((cert) => {
+              const status = cert.status ?? 'DRAFT'
+              const config = getStatusConfig(status)
+              const StatusIcon = config.icon
+              const observations = cert.observations ?? []
+              const c1Count = countObservationsByCode(observations, 'C1')
+              const c2Count = countObservationsByCode(observations, 'C2')
+              const c3Count = countObservationsByCode(observations, 'C3')
+              const circuitCount = cert.circuits?.length ?? 0
 
-            {/* Search and Filter */}
-            <div className="flex gap-3 mb-4">
-              <div className="flex-1 relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-text-muted" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search address, client, or report number..."
-                  className="cv-input w-full pl-10"
-                />
-              </div>
-              <select
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value as typeof filterStatus)}
-                className="cv-input"
-              >
-                <option value="all">All Status</option>
-                <option value="draft">Drafts</option>
-                <option value="complete">Complete</option>
-              </select>
-            </div>
-
-            {/* Certificate List */}
-            {isLoading ? (
-              <div className="cv-panel text-center py-8">
-                <div className="w-8 h-8 border-4 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-                <p className="text-text-muted">Loading certificates...</p>
-              </div>
-            ) : filteredCertificates.length === 0 ? (
-              <div className="cv-panel text-center py-8">
-                <FileText className="w-12 h-12 mx-auto text-text-muted mb-3" />
-                <h3 className="font-semibold text-text mb-1">No Certificates Found</h3>
-                <p className="text-sm text-text-muted mb-4">
-                  {searchQuery || filterStatus !== 'all'
-                    ? 'Try adjusting your search or filter'
-                    : 'Start your first EICR inspection'}
-                </p>
-                {!searchQuery && filterStatus === 'all' && (
-                  <button
-                    type="button"
-                    onClick={handleNewInspection}
-                    className="cv-btn-primary inline-flex items-center gap-2"
-                  >
-                    <Plus className="w-4 h-4" />
-                    New Inspection
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {filteredCertificates.map((cert) => (
-                  <button
-                    key={cert.id}
-                    type="button"
-                    onClick={() => handleViewCertificate(cert.id, cert.status)}
-                    className="w-full cv-panel hover:border-accent/50 transition-colors text-left"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-start gap-3">
-                        <div className={`
-                          w-10 h-10 rounded-lg flex items-center justify-center
-                          ${cert.status === 'complete'
-                            ? cert.hasC1OrC2
-                              ? 'bg-red-500/20'
-                              : 'bg-green-500/20'
-                            : 'bg-amber-500/20'}
-                        `}>
-                          {cert.status === 'complete' ? (
-                            cert.hasC1OrC2 ? (
-                              <AlertTriangle className="w-5 h-5 text-red-500" />
-                            ) : (
-                              <CheckCircle className="w-5 h-5 text-green-500" />
-                            )
-                          ) : (
-                            <Clock className="w-5 h-5 text-amber-500" />
-                          )}
-                        </div>
-                        <div>
-                          <div className="font-medium text-text">{cert.address}</div>
-                          <div className="text-sm text-text-muted">{cert.clientName}</div>
-                          <div className="flex items-center gap-3 mt-1 text-xs text-text-muted">
-                            <span className="flex items-center gap-1">
-                              <Calendar className="w-3 h-3" />
-                              {formatDate(cert.inspectionDate)}
-                            </span>
-                            <span>{cert.circuitCount} circuits</span>
-                            {cert.observationCount > 0 && (
-                              <span className={cert.hasC1OrC2 ? 'text-red-500' : ''}>
-                                {cert.observationCount} obs
-                              </span>
-                            )}
-                          </div>
-                        </div>
+              return (
+                <Link
+                  key={cert.id}
+                  to={
+                    status === 'DRAFT'
+                      ? '/inspection/new'
+                      : `/inspection/capture`
+                  }
+                  state={{ certificate: cert }}
+                  className="cv-panel block p-4 hover:border-certvoice-accent/50 transition-colors"
+                >
+                  {/* Top row */}
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-certvoice-text truncate">
+                        {cert.installationDetails?.installationAddress ?? 'No address'}
                       </div>
-                      <div className="flex flex-col items-end gap-2">
-                        <span className={`
-                          cv-badge text-xs
-                          ${cert.status === 'complete'
-                            ? cert.hasC1OrC2
-                              ? 'bg-red-500/20 text-red-500'
-                              : 'bg-green-500/20 text-green-500'
-                            : 'bg-amber-500/20 text-amber-500'}
-                        `}>
-                          {cert.status === 'complete'
-                            ? cert.hasC1OrC2
-                              ? 'Unsatisfactory'
-                              : 'Satisfactory'
-                            : 'Draft'}
-                        </span>
-                        <span className="text-xs text-text-muted font-mono">
-                          {cert.reportNumber}
-                        </span>
+                      <div className="text-xs text-certvoice-muted mt-0.5">
+                        {cert.clientDetails?.clientName ?? 'No client'} ·{' '}
+                        {cert.reportNumber}
                       </div>
                     </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </section>
+                    <span className={`${config.badgeClass} shrink-0 ml-2`}>
+                      <StatusIcon className="w-3 h-3 inline mr-1" />
+                      {config.label}
+                    </span>
+                  </div>
 
-          {/* Quick Tips */}
-          <section className="cv-panel bg-surface-2 border-border/50">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center flex-shrink-0">
-                <Mic className="w-5 h-5 text-accent" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-text">Voice Capture Tip</h3>
-                <p className="text-sm text-text-muted mt-1">
-                  Speak naturally with trade terminology. Say "Kitchen ring final, circuit 3, Zs 0.42 ohms, 
-                  R1+R2 0.31, insulation greater than 200 meg, all satisfactory" and CertVoice extracts 
-                  all the fields automatically.
-                </p>
-              </div>
-            </div>
-          </section>
-        </main>
+                  {/* Stats row */}
+                  <div className="flex items-center gap-3 text-xs">
+                    <span className="text-certvoice-muted">
+                      {circuitCount} circuit{circuitCount !== 1 ? 's' : ''}
+                    </span>
 
-        {/* Bottom Navigation */}
-        <nav className="fixed bottom-0 left-0 right-0 bg-surface border-t border-border safe-area-bottom">
-          <div className="max-w-6xl mx-auto px-4">
-            <div className="flex items-center justify-around py-2">
-              <Link
-                to="/"
-                className="flex flex-col items-center gap-1 px-4 py-2 text-accent"
-              >
-                <Zap className="w-5 h-5" />
-                <span className="text-xs font-medium">Home</span>
-              </Link>
-              <Link
-                to="/certificates"
-                className="flex flex-col items-center gap-1 px-4 py-2 text-text-muted hover:text-text"
-              >
-                <FileText className="w-5 h-5" />
-                <span className="text-xs">Certificates</span>
-              </Link>
-              <button
-                type="button"
-                onClick={handleNewInspection}
-                className="flex flex-col items-center gap-1 px-4 py-2 -mt-4"
-              >
-                <div className="w-12 h-12 rounded-full bg-accent flex items-center justify-center shadow-lg">
-                  <Plus className="w-6 h-6 text-white" />
-                </div>
-              </button>
-              <Link
-                to="/analytics"
-                className="flex flex-col items-center gap-1 px-4 py-2 text-text-muted hover:text-text"
-              >
-                <BarChart3 className="w-5 h-5" />
-                <span className="text-xs">Analytics</span>
-              </Link>
-              <Link
-                to="/settings"
-                className="flex flex-col items-center gap-1 px-4 py-2 text-text-muted hover:text-text"
-              >
-                <Settings className="w-5 h-5" />
-                <span className="text-xs">Settings</span>
-              </Link>
-            </div>
-          </div>
-        </nav>
+                    {c1Count > 0 && (
+                      <span className="cv-code-c1 text-[10px] px-1.5 py-0.5 rounded">
+                        C1: {c1Count}
+                      </span>
+                    )}
+                    {c2Count > 0 && (
+                      <span className="cv-code-c2 text-[10px] px-1.5 py-0.5 rounded">
+                        C2: {c2Count}
+                      </span>
+                    )}
+                    {c3Count > 0 && (
+                      <span className="cv-code-c3 text-[10px] px-1.5 py-0.5 rounded">
+                        C3: {c3Count}
+                      </span>
+                    )}
+
+                    <span className="text-certvoice-muted ml-auto">
+                      {cert.updatedAt ? formatTimeAgo(cert.updatedAt) : ''}
+                    </span>
+                  </div>
+
+                  {/* Date row */}
+                  <div className="text-[10px] text-certvoice-muted/60 mt-2">
+                    Inspected:{' '}
+                    {cert.reportReason?.inspectionDates?.[0]
+                      ? formatDate(cert.reportReason.inspectionDates[0])
+                      : '—'}
+                  </div>
+                </Link>
+              )
+            })
+          )}
+        </div>
+
+        {/* ---- Bottom spacer ---- */}
+        <div className="h-8" />
       </div>
     </>
   )
