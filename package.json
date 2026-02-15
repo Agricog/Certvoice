@@ -22,8 +22,9 @@
     "react-helmet-async": "^2.0.5",
     "react-router-dom": "^6.26.1",
     "@upstash/ratelimit": "^2",
-"@upstash/redis": "^1",
-"@neondatabase/serverless": "^0.10"
+    "@upstash/redis": "^1",
+    "@neondatabase/serverless": "^0.10",
+    "pdf-lib": "^1.17"
   },
   "devDependencies": {
     "@types/dompurify": "^3.0.5",
