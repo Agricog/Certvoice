@@ -5,19 +5,27 @@
  *   - Sentry error tracking (before anything else)
  *   - React strict mode
  *   - HelmetProvider for SEO
+ *   - ClerkProvider for authentication
  *   - App root with error boundary
  */
-
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import * as Sentry from '@sentry/react'
 import { HelmetProvider } from 'react-helmet-async'
+import { ClerkProvider } from '@clerk/clerk-react'
 import { initializeSentry } from './utils/errorTracking'
 import App from './App'
 import './index.css'
 
 // --- Initialise Sentry FIRST (captures all subsequent errors) ---
 initializeSentry()
+
+// --- Clerk publishable key (public, safe for frontend) ---
+const CLERK_PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string
+
+if (!CLERK_PUBLISHABLE_KEY) {
+  throw new Error('VITE_CLERK_PUBLISHABLE_KEY is not set. Add it to your Railway environment variables.')
+}
 
 // --- Error Boundary Fallback ---
 function ErrorFallback() {
@@ -54,9 +62,11 @@ if (!rootElement) {
 createRoot(rootElement).render(
   <StrictMode>
     <Sentry.ErrorBoundary fallback={<ErrorFallback />}>
-      <HelmetProvider>
-        <App />
-      </HelmetProvider>
+      <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY}>
+        <HelmetProvider>
+          <App />
+        </HelmetProvider>
+      </ClerkProvider>
     </Sentry.ErrorBoundary>
   </StrictMode>
 )
