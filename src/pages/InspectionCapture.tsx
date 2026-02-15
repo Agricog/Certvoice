@@ -17,7 +17,7 @@
  */
 
 import { useState, useCallback, useMemo } from 'react'
-import { useLocation, useNavigate, Link } from 'react-router-dom'
+import { useLocation, Link } from 'react-router-dom'
 import { Helmet } from 'react-helmet-async'
 import {
   ArrowLeft,
@@ -36,7 +36,6 @@ import type {
   DistributionBoardHeader,
   SupplyCharacteristics,
   InstallationParticulars,
-  InspectionItem,
   InspectionOutcome,
   ClassificationCode,
 } from '../types/eicr'
@@ -59,61 +58,43 @@ type CaptureTab = 'circuits' | 'observations' | 'supply' | 'checklist'
 
 const EMPTY_SUPPLY: SupplyCharacteristics = {
   earthingType: null,
-  supplyType: null,
-  conductorConfig: null,
-  polarityConfirmed: false,
-  otherSources: null,
+  supplyType: 'AC',
+  conductorConfig: '1PH_2WIRE',
+  supplyPolarityConfirmed: false,
+  otherSourcesPresent: false,
   nominalVoltage: null,
   nominalFrequency: 50,
-  prospectiveFaultCurrent: null,
-  externalEarthFaultLoop: null,
-  supplyProtectiveDevice: {
-    bsNumber: null,
-    type: null,
-    ratedCurrent: null,
-  },
+  ipf: null,
+  ze: null,
+  supplyDeviceBsEn: '',
+  supplyDeviceType: '',
+  supplyDeviceRating: null,
 }
 
 const EMPTY_PARTICULARS: InstallationParticulars = {
-  meansOfEarthing: {
-    distributorFacility: false,
-    installationElectrode: false,
-  },
-  earthElectrode: {
-    type: null,
-    location: null,
-    resistance: null,
-  },
-  mainSwitch: {
-    location: null,
-    bsNumber: null,
-    numberOfPoles: null,
-    currentRating: null,
-    fuseRating: null,
-    voltageRating: null,
-    rcdType: null,
-    rcdRating: null,
-    rcdTimeDelay: null,
-    rcdOperatingTime: null,
-  },
-  earthingConductor: {
-    material: null,
-    csa: null,
-    connectionVerified: false,
-  },
-  mainBonding: {
-    material: null,
-    csa: null,
-    connectionVerified: false,
-  },
-  bondingConnections: {
-    waterPipes: null,
-    gasPipes: null,
-    oilPipes: null,
-    structuralSteel: null,
-    lightningProtection: null,
-    other: null,
-  },
+  distributorFacility: false,
+  installationElectrode: false,
+  electrodeType: '',
+  electrodeLocation: '',
+  electrodeResistance: null,
+  mainSwitchLocation: '',
+  mainSwitchBsEn: '',
+  mainSwitchPoles: null,
+  mainSwitchCurrentRating: null,
+  mainSwitchDeviceRating: null,
+  mainSwitchVoltageRating: null,
+  earthingConductorMaterial: 'COPPER',
+  earthingConductorCsa: null,
+  earthingConductorVerified: false,
+  bondingConductorMaterial: 'COPPER',
+  bondingConductorCsa: null,
+  bondingConductorVerified: false,
+  bondingWater: 'NA',
+  bondingGas: 'NA',
+  bondingOil: 'NA',
+  bondingSteel: 'NA',
+  bondingLightning: 'NA',
+  bondingOther: 'NA',
 }
 
 // ============================================================
@@ -122,7 +103,6 @@ const EMPTY_PARTICULARS: InstallationParticulars = {
 
 export default function InspectionCapture() {
   const location = useLocation()
-  const navigate = useNavigate()
 
   // --- Certificate state ---
   const initialCert = (location.state as { certificate?: Partial<EICRCertificate> })
@@ -164,7 +144,7 @@ export default function InspectionCapture() {
 
   // Circuits for current board
   const boardCircuits = useMemo(
-    () => circuits.filter((c) => c.dbReference === activeBoard?.dbReference),
+    () => circuits.filter((c) => c.dbId === activeBoard?.dbReference),
     [circuits, activeBoard]
   )
 
@@ -195,12 +175,12 @@ export default function InspectionCapture() {
           } else {
             existing.push({
               ...circuit,
-              dbReference: activeBoard?.dbReference ?? 'DB1',
+              dbId: activeBoard?.dbReference ?? 'DB1',
             } as CircuitDetail)
           }
           return { ...prev, circuits: existing, updatedAt: new Date().toISOString() }
         })
-        trackCircuitCaptured()
+        trackCircuitCaptured(circuit.circuitType ?? 'UNKNOWN', 'voice')
         setShowCircuitRecorder(false)
         setEditingCircuitIndex(null)
       } catch (error) {
@@ -230,7 +210,10 @@ export default function InspectionCapture() {
           }
           return { ...prev, observations: existing, updatedAt: new Date().toISOString() }
         })
-        trackObservationCaptured()
+        trackObservationCaptured(
+          observation.classificationCode ?? 'C3',
+          (observation.photoKeys?.length ?? 0) > 0
+        )
         setShowObservationRecorder(false)
         setEditingObsIndex(null)
       } catch (error) {
@@ -273,9 +256,10 @@ export default function InspectionCapture() {
           if (idx >= 0) {
             items[idx] = { ...items[idx], outcome, notes }
           }
+          const completed = items.filter((i) => i.outcome !== null).length
+          trackChecklistProgress(completed, items.length)
           return { ...prev, inspectionSchedule: items, updatedAt: new Date().toISOString() }
         })
-        trackChecklistProgress()
       } catch (error) {
         captureError(error, 'InspectionCapture.handleItemChange')
       }
@@ -288,7 +272,7 @@ export default function InspectionCapture() {
       setCertificate((prev) => {
         const items = [...(prev.inspectionSchedule ?? [])]
         const updated = items.map((item) => {
-          if (item.sectionNumber === sectionNumber && !item.outcome) {
+          if (item.section === sectionNumber && !item.outcome) {
             return { ...item, outcome: 'PASS' as InspectionOutcome }
           }
           return item
@@ -396,9 +380,9 @@ export default function InspectionCapture() {
       ) : (
         boardCircuits.map((circuit, idx) => {
           const globalIdx = circuits.findIndex(
-            (c) => c.circuitNumber === circuit.circuitNumber && c.dbReference === circuit.dbReference
+            (c) => c.circuitNumber === circuit.circuitNumber && c.dbId === circuit.dbId
           )
-          const isPass = circuit.circuitStatus === 'SATISFACTORY'
+          const isPass = circuit.status === 'SATISFACTORY'
           return (
             <button
               key={`${circuit.circuitNumber}-${idx}`}
@@ -423,12 +407,12 @@ export default function InspectionCapture() {
                     isPass ? 'cv-badge-pass' : 'cv-badge-fail'
                   }`}
                 >
-                  {circuit.circuitStatus ?? 'INCOMPLETE'}
+                  {circuit.status ?? 'INCOMPLETE'}
                 </span>
               </div>
-              {circuit.circuitLocation && (
+              {circuit.remarks && (
                 <div className="text-[10px] text-certvoice-muted mt-1">
-                  {circuit.circuitLocation}
+                  {circuit.remarks}
                 </div>
               )}
             </button>
