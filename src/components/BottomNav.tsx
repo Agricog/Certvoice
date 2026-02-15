@@ -25,7 +25,7 @@ export default function BottomNav() {
   };
 
   // Hide nav during active inspection capture to avoid accidental navigation
-  if (location.pathname.startsWith('/inspect/')) return null;
+  if (location.pathname.startsWith('/inspect/') || location.pathname.startsWith('/sign-')) return null;
 
   return (
     <nav
