@@ -63,12 +63,16 @@ const MOCK_CERTIFICATES: Partial<EICRCertificate>[] = [
     circuits: [],
     observations: [
       {
+        id: 'obs-001',
         itemNumber: 1,
         observationText: 'Supply tails not adequately supported',
         classificationCode: 'C2',
         dbReference: 'DB1',
+        circuitReference: '',
         location: 'Main intake',
         regulationReference: 'Reg 522.8.5',
+        photoKeys: [],
+        remedialAction: 'Secure supply tails with appropriate clips',
       },
     ],
     createdAt: '2026-02-14T09:30:00Z',
@@ -77,7 +81,7 @@ const MOCK_CERTIFICATES: Partial<EICRCertificate>[] = [
   {
     id: 'cert-002',
     reportNumber: 'CV-KP9M3N',
-    status: 'COMPLETED',
+    status: 'COMPLETE',
     clientDetails: {
       clientName: 'Acme Properties Ltd',
       clientAddress: '10 High Street, Falmouth TR11 2AF',
@@ -148,15 +152,15 @@ function getStatusConfig(status: CertificateStatus) {
         badgeClass: 'cv-badge-pass',
         icon: Clock,
       }
-    case 'COMPLETED':
+    case 'COMPLETE':
       return {
-        label: 'Completed',
+        label: 'Complete',
         badgeClass: 'cv-badge-pass',
         icon: CheckCircle2,
       }
-    case 'SUBMITTED':
+    case 'ISSUED':
       return {
-        label: 'Submitted',
+        label: 'Issued',
         badgeClass: 'cv-badge-pass',
         icon: CheckCircle2,
       }
@@ -252,7 +256,7 @@ export default function Home() {
       total: all.length,
       inProgress: all.filter((c) => c.status === 'IN_PROGRESS').length,
       drafts: all.filter((c) => c.status === 'DRAFT').length,
-      completed: all.filter((c) => c.status === 'COMPLETED').length,
+      completed: all.filter((c) => c.status === 'COMPLETE').length,
     }
   }, [])
 
@@ -261,7 +265,7 @@ export default function Home() {
     { value: 'ALL', label: 'All', count: stats.total },
     { value: 'IN_PROGRESS', label: 'Active', count: stats.inProgress },
     { value: 'DRAFT', label: 'Drafts', count: stats.drafts },
-    { value: 'COMPLETED', label: 'Done', count: stats.completed },
+    { value: 'COMPLETE', label: 'Done', count: stats.completed },
   ]
 
   return (
