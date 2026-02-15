@@ -20,11 +20,13 @@ on:
     paths:
       - 'workers/**'
       - 'wrangler.toml'
+      - '.github/workflows/deploy-workers.yml'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     name: Deploy Cloudflare Workers
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,6 +35,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
 
       - name: Install wrangler
         run: npm install -g wrangler
