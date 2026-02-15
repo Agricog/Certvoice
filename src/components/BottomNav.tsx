@@ -9,7 +9,7 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { path: '/', label: 'Home', icon: Home },
+  { path: '/dashboard', label: 'Home', icon: Home },
   { path: '/new', label: 'New', icon: PlusCircle, primary: true },
   { path: '/certificates', label: 'Certs', icon: FileText },
   { path: '/settings', label: 'Settings', icon: Settings },
@@ -20,12 +20,18 @@ export default function BottomNav() {
   const navigate = useNavigate();
 
   const isActive = (path: string): boolean => {
-    if (path === '/') return location.pathname === '/';
+    if (path === '/dashboard') return location.pathname === '/dashboard';
     return location.pathname.startsWith(path);
   };
 
-  // Hide nav during active inspection capture to avoid accidental navigation
-  if (location.pathname.startsWith('/inspect/') || location.pathname.startsWith('/sign-')) return null;
+  // Hide nav on public landing page, during inspection capture, and on auth pages
+  if (
+    location.pathname === '/' ||
+    location.pathname.startsWith('/inspect/') ||
+    location.pathname.startsWith('/sign-')
+  ) {
+    return null;
+  }
 
   return (
     <nav
