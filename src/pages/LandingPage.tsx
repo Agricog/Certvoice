@@ -36,6 +36,7 @@ import {
   Users,
   Award,
   Timer,
+  Building2,
   Mail,
 } from 'lucide-react'
 
@@ -89,7 +90,7 @@ const softwareAppSchema = {
     'AI extraction of circuit test results',
     'BS 7671 compliant PDF generation',
     'Offline-capable PWA',
-    'NICEIC, NAPIT, ELECSA compatible',
+    'Registration body details auto-populated',
   ],
 }
 
@@ -107,10 +108,10 @@ const faqSchema = {
     },
     {
       '@type': 'Question',
-      name: 'Is CertVoice accepted by NICEIC, NAPIT, and ELECSA?',
+      name: 'Is CertVoice compatible with scheme provider requirements?',
       acceptedAnswer: {
         '@type': 'Answer',
-        text: 'Yes. NICEIC confirmed you can use any certificates providing they comply with BS 7671. CertVoice generates fully compliant EICRs with all required sections, schedules, and test result columns.',
+        text: 'CertVoice generates EICRs designed to comply with BS 7671, including all required sections, schedules, and test result columns. You can pre-fill your registration body details so they auto-populate every certificate.',
       },
     },
     {
@@ -403,7 +404,7 @@ export default function LandingPage() {
                 <div className="inline-flex items-center gap-2 bg-certvoice-surface border border-certvoice-border rounded-full px-4 py-1.5 mb-8">
                   <Shield className="w-3.5 h-3.5 text-certvoice-green" />
                   <span className="text-xs font-medium text-certvoice-muted">
-                    BS 7671 compliant · NICEIC accepted
+                    BS 7671 compliant · Built for UK electricians
                   </span>
                 </div>
 
@@ -617,7 +618,7 @@ export default function LandingPage() {
                 <FeatureCard
                   icon={Shield}
                   title="BS 7671 compliant"
-                  description="Every section, schedule, and test column matches the current wiring regulations. Accepted by all scheme providers."
+                  description="Every section, schedule, and test column matches the current wiring regulations. Designed for submission to your registration body."
                 />
                 <FeatureCard
                   icon={FileText}
@@ -637,7 +638,7 @@ export default function LandingPage() {
                 <FeatureCard
                   icon={Award}
                   title="Scheme ready"
-                  description="Pre-fill your NICEIC, NAPIT, or ELECSA registration details once. They auto-populate every certificate."
+                  description="Pre-fill your registration body and membership details once. They auto-populate every certificate you generate."
                 />
               </div>
             </div>
@@ -648,22 +649,23 @@ export default function LandingPage() {
             <div className="max-w-5xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
               <div className="text-center mb-10">
                 <h2 className="text-2xl sm:text-3xl font-bold text-certvoice-text mb-4">
-                  Trusted and compliant
+                  Built to BS 7671
                 </h2>
                 <p className="text-sm text-certvoice-muted max-w-lg mx-auto">
-                  NICEIC confirmed: &ldquo;You can use any certificates providing they
-                  comply with BS 7671.&rdquo; CertVoice certificates are fully
-                  compliant with the current 18th Edition wiring regulations.
+                  CertVoice generates EICRs designed to comply with the current 18th
+                  Edition wiring regulations. Every section, schedule, and test result
+                  column follows the BS 7671 format so your certificates are ready for
+                  submission to your registration body.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-w-3xl mx-auto">
                 <ComplianceBadge label="BS 7671:2018+A2:2022" />
-                <ComplianceBadge label="NICEIC accepted" />
-                <ComplianceBadge label="NAPIT accepted" />
-                <ComplianceBadge label="ELECSA accepted" />
                 <ComplianceBadge label="All 31 circuit columns" />
                 <ComplianceBadge label="Full inspection schedule" />
+                <ComplianceBadge label="Section I & J included" />
+                <ComplianceBadge label="Observations & recommendations" />
+                <ComplianceBadge label="Registration body fields" />
               </div>
 
               <div className="mt-10 text-center">
@@ -858,6 +860,18 @@ export default function LandingPage() {
                 >
                   Early access
                 </a>
+                <Link
+                  to="/privacy"
+                  className="hover:text-certvoice-text transition-colors"
+                >
+                  Privacy
+                </Link>
+                <Link
+                  to="/terms"
+                  className="hover:text-certvoice-text transition-colors"
+                >
+                  Terms
+                </Link>
                 <a
                   href="mailto:support@certvoice.co.uk"
                   className="hover:text-certvoice-text transition-colors"
