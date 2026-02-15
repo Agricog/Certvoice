@@ -1,4 +1,4 @@
-:80 {
+:{$PORT:80} {
 	header {
 		X-Frame-Options "DENY"
 		X-Content-Type-Options "nosniff"
