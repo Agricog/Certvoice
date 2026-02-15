@@ -23,7 +23,7 @@ import { captureError } from '../utils/errorTracking'
 /**
  * Base URL for Cloudflare Workers.
  * In development: empty string (proxied via Vite or same-origin).
- * In production: set via VITE_API_BASE_URL env var.
+ * In production: set via VITE_API_BASE_URL env var in Railway.
  */
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 
@@ -42,38 +42,31 @@ export interface ApiResponse<T> {
 }
 
 // ============================================================
+// CLERK TYPE (window global exposed by ClerkProvider)
+// ============================================================
+
+interface ClerkInstance {
+  session?: {
+    getToken: () => Promise<string | null>
+  } | null
+}
+
+// ============================================================
 // AUTH TOKEN
 // ============================================================
 
 /**
- * Attempts to get Clerk session token.
- * Returns null if Clerk is not initialised or user is not signed in.
- * Uses window.__clerk__ which ClerkProvider exposes once mounted.
+ * Gets Clerk session token for API requests.
+ * ClerkProvider exposes the Clerk instance on window.Clerk once mounted.
+ * Returns null if Clerk is not ready or user is not signed in.
  */
 async function getAuthToken(): Promise<string | null> {
   try {
-    const win = window as unknown as Record<string, unknown>
+    const clerk = (window as unknown as { Clerk?: ClerkInstance }).Clerk
 
-    // Clerk exposes itself on window when ClerkProvider is mounted
-    const clerk = win.__clerk_frontend_api ? win.Clerk : null
+    if (!clerk?.session) return null
 
-    if (!clerk) {
-      // Try the newer Clerk SDK pattern
-      const clerkInstance = win.Clerk as
-        | { session?: { getToken: () => Promise<string> } }
-        | undefined
-
-      if (clerkInstance?.session) {
-        return await clerkInstance.session.getToken()
-      }
-
-      return null
-    }
-
-    const session = (clerk as { session?: { getToken: () => Promise<string> } }).session
-    if (!session) return null
-
-    return await session.getToken()
+    return await clerk.session.getToken()
   } catch {
     return null
   }
