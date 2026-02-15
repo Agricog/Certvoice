@@ -36,6 +36,8 @@ import {
   Users,
   Award,
   Timer,
+  Building2,
+  Mail,
 } from 'lucide-react'
 
 // ============================================================
@@ -51,13 +53,32 @@ const softwareAppSchema = {
   description:
     'Voice-first EICR certificate app for UK electricians. Speak your inspection findings and let AI build your BS 7671-compliant electrical certificates.',
   url: 'https://certvoice.co.uk',
-  offers: {
-    '@type': 'Offer',
-    price: '29.99',
-    priceCurrency: 'GBP',
-    priceValidUntil: '2027-01-01',
-    availability: 'https://schema.org/PreOrder',
-  },
+  offers: [
+    {
+      '@type': 'Offer',
+      name: 'Solo',
+      price: '29.99',
+      priceCurrency: 'GBP',
+      priceValidUntil: '2027-01-01',
+      availability: 'https://schema.org/InStock',
+    },
+    {
+      '@type': 'Offer',
+      name: 'Team',
+      price: '24.99',
+      priceCurrency: 'GBP',
+      priceValidUntil: '2027-01-01',
+      availability: 'https://schema.org/PreOrder',
+    },
+    {
+      '@type': 'Offer',
+      name: 'Business',
+      price: '19.99',
+      priceCurrency: 'GBP',
+      priceValidUntil: '2027-01-01',
+      availability: 'https://schema.org/PreOrder',
+    },
+  ],
   aggregateRating: {
     '@type': 'AggregateRating',
     ratingValue: '4.9',
@@ -106,7 +127,7 @@ const faqSchema = {
       name: 'How much does CertVoice cost?',
       acceptedAnswer: {
         '@type': 'Answer',
-        text: 'CertVoice costs £29.99 per month with a 14-day free trial. No contracts, cancel any time. This includes unlimited EICR certificates, AI voice extraction, and PDF generation.',
+        text: 'CertVoice Solo costs £29.99 per month with a 14-day free trial. Team plans start at £24.99 per seat/month, and Business plans at £19.99 per seat/month. No contracts, cancel any time.',
       },
     },
   ],
@@ -166,6 +187,122 @@ function ComplianceBadge({ label }: { label: string }) {
     <div className="flex items-center gap-2 bg-certvoice-surface border border-certvoice-border rounded-lg px-4 py-3">
       <CheckCircle2 className="w-4 h-4 text-certvoice-green shrink-0" />
       <span className="text-sm font-medium text-certvoice-text">{label}</span>
+    </div>
+  )
+}
+
+// ============================================================
+// PRICING CARD
+// ============================================================
+
+interface PricingTierProps {
+  name: string
+  price: string
+  priceSuffix: string
+  description: string
+  features: string[]
+  cta: string
+  ctaLink?: string
+  highlighted?: boolean
+  badge?: string
+  disabled?: boolean
+  comingSoon?: boolean
+}
+
+function PricingTier({
+  name,
+  price,
+  priceSuffix,
+  description,
+  features,
+  cta,
+  ctaLink,
+  highlighted = false,
+  badge,
+  disabled = false,
+  comingSoon = false,
+}: PricingTierProps) {
+  const cardClasses = highlighted
+    ? 'cv-panel border-certvoice-accent/40 relative'
+    : 'cv-panel relative'
+
+  return (
+    <div className={cardClasses}>
+      {/* Badge */}
+      {badge && (
+        <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+          <span
+            className={
+              comingSoon
+                ? 'inline-block text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-certvoice-surface border border-certvoice-border text-certvoice-muted'
+                : 'inline-block text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-certvoice-accent text-white'
+            }
+          >
+            {badge}
+          </span>
+        </div>
+      )}
+
+      <div className="pt-2">
+        <h3 className="text-base font-bold text-certvoice-text mb-1">{name}</h3>
+        <p className="text-xs text-certvoice-muted mb-4 leading-relaxed">
+          {description}
+        </p>
+
+        {/* Price */}
+        <div className="mb-5">
+          <span className="text-3xl font-bold text-certvoice-text font-mono">
+            {price}
+          </span>
+          <span className="text-sm text-certvoice-muted">{priceSuffix}</span>
+        </div>
+
+        {/* Features */}
+        <ul className="space-y-2.5 mb-6">
+          {features.map((item) => (
+            <li
+              key={item}
+              className="flex items-start gap-2.5 text-xs text-certvoice-text leading-relaxed"
+            >
+              <CheckCircle2
+                className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
+                  disabled ? 'text-certvoice-muted/50' : 'text-certvoice-green'
+                }`}
+              />
+              <span className={disabled ? 'text-certvoice-muted/70' : ''}>
+                {item}
+              </span>
+            </li>
+          ))}
+        </ul>
+
+        {/* CTA */}
+        {ctaLink && !disabled ? (
+          <Link
+            to={ctaLink}
+            className={`w-full flex items-center justify-center gap-2 py-2.5 text-sm font-medium rounded-lg transition-colors ${
+              highlighted
+                ? 'cv-btn-primary'
+                : 'bg-certvoice-surface border border-certvoice-border text-certvoice-text hover:border-certvoice-accent/40'
+            }`}
+          >
+            {cta}
+            {highlighted && <ArrowRight className="w-3.5 h-3.5" />}
+          </Link>
+        ) : disabled ? (
+          <div className="w-full flex items-center justify-center gap-2 py-2.5 text-sm font-medium rounded-lg bg-certvoice-surface/50 border border-certvoice-border/50 text-certvoice-muted/50 cursor-not-allowed">
+            {cta}
+          </div>
+        ) : (
+          <a
+            href="mailto:enterprise@certvoice.co.uk?subject=CertVoice Enterprise Enquiry"
+            className="w-full flex items-center justify-center gap-2 py-2.5 text-sm font-medium rounded-lg bg-certvoice-surface border border-certvoice-border text-certvoice-text hover:border-certvoice-accent/40 transition-colors"
+          >
+            <Mail className="w-3.5 h-3.5" />
+            {cta}
+          </a>
+        )}
+      </div>
     </div>
   )
 }
@@ -542,49 +679,93 @@ export default function LandingPage() {
           </section>
 
           {/* ============ PRICING ============ */}
-          <section className="bg-certvoice-surface/50 border-y border-certvoice-border">
+          <section id="pricing" className="bg-certvoice-surface/50 border-y border-certvoice-border">
             <div className="max-w-5xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
-              <div className="max-w-md mx-auto">
-                <div className="cv-panel border-certvoice-accent/40 text-center">
-                  <div className="cv-badge-pass inline-block mb-4">14-day free trial</div>
-                  <div className="mb-1">
-                    <span className="text-4xl font-bold text-certvoice-text font-mono">
-                      £29.99
-                    </span>
-                    <span className="text-certvoice-muted text-sm">/month</span>
-                  </div>
-                  <p className="text-xs text-certvoice-muted mb-6">
-                    No contracts. Cancel any time. Less than the cost of one hour&apos;s
-                    wasted admin.
-                  </p>
+              <div className="text-center mb-12">
+                <h2 className="text-2xl sm:text-3xl font-bold text-certvoice-text mb-4">
+                  Simple, transparent pricing
+                </h2>
+                <p className="text-sm text-certvoice-muted max-w-lg mx-auto">
+                  No contracts. Cancel any time. Every plan includes unlimited EICR
+                  certificates, AI voice extraction, and BS 7671-compliant PDF generation.
+                </p>
+              </div>
 
-                  <ul className="space-y-3 text-left mb-8">
-                    {[
-                      'Unlimited EICR certificates',
-                      'AI voice extraction',
-                      'BS 7671-compliant PDF generation',
-                      'Offline capture with auto-sync',
-                      'Photo evidence attachment',
-                      'Email certificates to clients',
-                    ].map((item) => (
-                      <li
-                        key={item}
-                        className="flex items-center gap-3 text-sm text-certvoice-text"
-                      >
-                        <CheckCircle2 className="w-4 h-4 text-certvoice-green shrink-0" />
-                        {item}
-                      </li>
-                    ))}
-                  </ul>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* Solo */}
+                <PricingTier
+                  name="Solo"
+                  price="£29.99"
+                  priceSuffix="/month"
+                  description="For independent electricians. Everything you need to complete EICRs by voice."
+                  features={[
+                    'Unlimited EICR certificates',
+                    'AI voice extraction',
+                    'BS 7671-compliant PDFs',
+                    'Offline capture with auto-sync',
+                    'Photo evidence attachment',
+                    'Email certificates to clients',
+                    '14-day free trial',
+                  ]}
+                  cta="Start free trial"
+                  ctaLink="/sign-up"
+                  highlighted
+                  badge="Most popular"
+                />
 
-                  <Link
-                    to="/sign-up"
-                    className="cv-btn-primary w-full flex items-center justify-center gap-2 py-3 text-base"
-                  >
-                    Start free trial
-                    <ArrowRight className="w-4 h-4" />
-                  </Link>
-                </div>
+                {/* Team */}
+                <PricingTier
+                  name="Team"
+                  price="£24.99"
+                  priceSuffix="/seat/month"
+                  description="For small firms. Shared access and centralised billing for 2–10 engineers."
+                  features={[
+                    'Everything in Solo',
+                    'Shared certificate access',
+                    'Per-engineer accounts',
+                    'Centralised billing',
+                    '17% savings per seat',
+                  ]}
+                  cta="Coming soon"
+                  disabled
+                  comingSoon
+                  badge="Coming soon"
+                />
+
+                {/* Business */}
+                <PricingTier
+                  name="Business"
+                  price="£19.99"
+                  priceSuffix="/seat/month"
+                  description="For established contractors. Volume pricing and admin controls for 11–25 engineers."
+                  features={[
+                    'Everything in Team',
+                    'Volume pricing',
+                    'Priority support',
+                    'Admin dashboard',
+                    '33% savings per seat',
+                  ]}
+                  cta="Coming soon"
+                  disabled
+                  comingSoon
+                  badge="Coming soon"
+                />
+
+                {/* Enterprise */}
+                <PricingTier
+                  name="Enterprise"
+                  price="Custom"
+                  priceSuffix=""
+                  description="For large contractors and multi-branch operations. 25+ engineers with bespoke onboarding."
+                  features={[
+                    'Everything in Business',
+                    'Annual billing',
+                    'Dedicated onboarding',
+                    'API access',
+                    'Custom integrations',
+                  ]}
+                  cta="Contact us"
+                />
               </div>
             </div>
           </section>
