@@ -2,9 +2,10 @@
  * CertVoice — Main Application Router
  *
  * Routes:
+ *   /                    — Public landing page (SEO, conversion)
  *   /sign-in             — Clerk sign-in (public)
  *   /sign-up             — Clerk sign-up (public)
- *   /                    — Dashboard (Home) (protected)
+ *   /dashboard           — Dashboard (Home) (protected)
  *   /new                 — Start new EICR inspection (protected)
  *   /inspect/:id         — Main capture workflow (protected)
  *   /certificates        — All completed certificates (protected)
@@ -14,11 +15,15 @@
  *
  * Auth: Clerk provider in main.tsx, routes protected via ProtectedRoute.
  * Monitoring: Sentry wraps Routes for performance tracking.
+ *
+ * @module App
  */
+
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
 import * as Sentry from '@sentry/react'
 
 // --- Page imports ---
+import LandingPage from './pages/LandingPage'
 import Home from './pages/Home'
 import NewInspection from './pages/NewInspection'
 import InspectionCapture from './pages/InspectionCapture'
@@ -37,6 +42,7 @@ const SentryRoutes = Sentry.withSentryReactRouterV6Routing(Routes)
 // ============================================================
 // 404
 // ============================================================
+
 function NotFound() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-certvoice-bg">
@@ -47,7 +53,7 @@ function NotFound() {
           The page you&apos;re looking for doesn&apos;t exist.
         </p>
         <Link to="/" className="cv-btn-primary inline-block">
-          Back to Dashboard
+          Back to Home
         </Link>
       </div>
     </div>
@@ -57,29 +63,32 @@ function NotFound() {
 // ============================================================
 // APP ROOT
 // ============================================================
+
 export default function App() {
   return (
     <BrowserRouter>
       {/* Main content area — bottom padding clears the fixed nav */}
       <div className="pb-20">
         <SentryRoutes>
-          {/* Public auth routes */}
+          {/* Public routes */}
+          <Route path="/" element={<LandingPage />} />
           <Route path="/sign-in/*" element={<AuthPage mode="sign-in" />} />
           <Route path="/sign-up/*" element={<AuthPage mode="sign-up" />} />
 
           {/* Protected routes */}
-          <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
+          <Route path="/dashboard" element={<ProtectedRoute><Home /></ProtectedRoute>} />
           <Route path="/new" element={<ProtectedRoute><NewInspection /></ProtectedRoute>} />
           <Route path="/inspect/:id" element={<ProtectedRoute><InspectionCapture /></ProtectedRoute>} />
           <Route path="/certificates" element={<ProtectedRoute><Certificates /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="/subscription" element={<ProtectedRoute><Subscription /></ProtectedRoute>} />
 
+          {/* 404 */}
           <Route path="*" element={<NotFound />} />
         </SentryRoutes>
       </div>
 
-      {/* Fixed bottom navigation — auto-hides on /inspect/:id and auth pages */}
+      {/* Fixed bottom navigation — auto-hides on public + auth pages */}
       <BottomNav />
     </BrowserRouter>
   )
