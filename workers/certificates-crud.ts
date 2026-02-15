@@ -13,6 +13,7 @@
  * Auth: Clerk JWT verified from Authorization header.
  * Data isolation: All queries filtered by engineer_id.
  * Rate limit: 60 requests/hour per engineer via Upstash.
+ * Guard: requestId, structured logs, safety switches per Build Standard v3.
  *
  * Deploy: wrangler deploy (separate from Railway frontend)
  *
@@ -33,11 +34,48 @@ interface Env {
   CLERK_JWKS_URL: string
   UPSTASH_REDIS_REST_URL: string
   UPSTASH_REDIS_REST_TOKEN: string
+  READ_ONLY_MODE?: string
 }
 
 interface ClerkJWTPayload {
   sub: string
   exp: number
+}
+
+interface StructuredLog {
+  requestId: string
+  route: string
+  method: string
+  status: number
+  latencyMs: number
+  userId: string | null
+  engineerId?: string | null
+  message?: string
+  error?: string
+}
+
+// ============================================================
+// CONSTANTS
+// ============================================================
+
+const MAX_PAGE_SIZE = 100
+
+// ============================================================
+// GUARD HELPERS
+// ============================================================
+
+function generateRequestId(): string {
+  const timestamp = Date.now().toString(36)
+  const random = crypto.randomUUID().slice(0, 8)
+  return `cv-cert-${timestamp}-${random}`
+}
+
+function structuredLog(log: StructuredLog): void {
+  console.log(JSON.stringify({
+    ...log,
+    service: 'certvoice-certificates-crud',
+    timestamp: new Date().toISOString(),
+  }))
 }
 
 // ============================================================
@@ -149,20 +187,22 @@ async function getEngineerId(
 // ============================================================
 // GET /api/certificates — List all certificates
 // Returns flat list with observation counts for card display.
+// Enforces MAX_PAGE_SIZE server-side.
 // ============================================================
 
 async function handleList(
   engineerId: string,
   env: Env,
   cors: Record<string, string>,
-  url: URL
+  url: URL,
+  requestId: string
 ): Promise<Response> {
   const sql = neon(env.DATABASE_URL)
 
   // Optional status filter from query param
   const statusParam = url.searchParams.get('status')
   const limitParam = parseInt(url.searchParams.get('limit') ?? '50', 10)
-  const limit = Math.min(Math.max(limitParam, 1), 200)
+  const limit = Math.min(Math.max(limitParam, 1), MAX_PAGE_SIZE)
 
   let rows: Record<string, unknown>[]
 
@@ -280,7 +320,7 @@ async function handleList(
     updatedAt: row.updated_at,
   }))
 
-  return json(certificates, 200, cors)
+  return json({ data: certificates, limit, requestId }, 200, cors)
 }
 
 // ============================================================
@@ -291,7 +331,8 @@ async function handleGet(
   engineerId: string,
   certId: string,
   env: Env,
-  cors: Record<string, string>
+  cors: Record<string, string>,
+  requestId: string
 ): Promise<Response> {
   const sql = neon(env.DATABASE_URL)
 
@@ -303,7 +344,7 @@ async function handleGet(
   `
 
   if (certRows.length === 0) {
-    return json({ error: 'Certificate not found' }, 404, cors)
+    return json({ error: 'Certificate not found', requestId }, 404, cors)
   }
 
   const cert = certRows[0]
@@ -456,6 +497,7 @@ async function handleGet(
       notes: i.notes ?? '',
     })),
     pdfKey: cert.pdf_r2_key ?? null,
+    requestId,
     createdAt: cert.created_at,
     updatedAt: cert.updated_at,
   }
@@ -471,7 +513,8 @@ async function handleCreate(
   engineerId: string,
   request: Request,
   env: Env,
-  cors: Record<string, string>
+  cors: Record<string, string>,
+  requestId: string
 ): Promise<Response> {
   const body = (await request.json()) as Record<string, unknown>
   const sql = neon(env.DATABASE_URL)
@@ -524,6 +567,7 @@ async function handleCreate(
       reportNumber: cert.report_number,
       status: cert.status,
       createdAt: cert.created_at,
+      requestId,
     },
     201,
     cors
@@ -532,6 +576,7 @@ async function handleCreate(
 
 // ============================================================
 // PUT /api/certificates/:id — Update certificate
+// FIX: engineerId now fully parameterised (was string-interpolated)
 // ============================================================
 
 async function handleUpdate(
@@ -539,7 +584,8 @@ async function handleUpdate(
   certId: string,
   request: Request,
   env: Env,
-  cors: Record<string, string>
+  cors: Record<string, string>,
+  requestId: string
 ): Promise<Response> {
   const body = (await request.json()) as Record<string, unknown>
   const sql = neon(env.DATABASE_URL)
@@ -552,7 +598,7 @@ async function handleUpdate(
   `
 
   if (existing.length === 0) {
-    return json({ error: 'Certificate not found' }, 404, cors)
+    return json({ error: 'Certificate not found', requestId }, 404, cors)
   }
 
   // Validate status transition
@@ -560,7 +606,7 @@ async function handleUpdate(
   const newStatus = body.status as string | undefined
   if (newStatus && !isValidStatusTransition(currentStatus, newStatus)) {
     return json(
-      { error: `Cannot transition from ${currentStatus} to ${newStatus}` },
+      { error: `Cannot transition from ${currentStatus} to ${newStatus}`, requestId },
       400,
       cors
     )
@@ -618,24 +664,24 @@ async function handleUpdate(
 
   // No fields to update
   if (Object.keys(updates).length === 0) {
-    return json({ error: 'No fields to update' }, 400, cors)
+    return json({ error: 'No fields to update', requestId }, 400, cors)
   }
 
-  // Build SET clause dynamically
+  // Build SET clause dynamically — ALL params including engineerId are parameterised
+  // Params: $1 = certId, $2 = engineerId, $3...$N = update values
   const setClauses = Object.entries(updates)
-    .map(([key], i) => `${key} = $${i + 2}`)
+    .map(([key], i) => `${key} = $${i + 3}`)
     .join(', ')
 
-  const values = [certId, ...Object.values(updates)]
+  const values = [certId, engineerId, ...Object.values(updates)]
 
-  // Use raw query for dynamic SET
   const result = await sql(
-    `UPDATE certificates SET ${setClauses} WHERE id = $1 AND engineer_id = '${engineerId}' AND deleted_at IS NULL RETURNING id, status, updated_at`,
+    `UPDATE certificates SET ${setClauses} WHERE id = $1 AND engineer_id = $2 AND deleted_at IS NULL RETURNING id, status, updated_at`,
     values
   )
 
   if (result.length === 0) {
-    return json({ error: 'Update failed' }, 500, cors)
+    return json({ error: 'Update failed', requestId }, 500, cors)
   }
 
   // Recalculate assessment if status changed to REVIEW or COMPLETE
@@ -648,6 +694,7 @@ async function handleUpdate(
       id: result[0].id,
       status: result[0].status,
       updatedAt: result[0].updated_at,
+      requestId,
     },
     200,
     cors
@@ -662,7 +709,8 @@ async function handleDelete(
   engineerId: string,
   certId: string,
   env: Env,
-  cors: Record<string, string>
+  cors: Record<string, string>,
+  requestId: string
 ): Promise<Response> {
   const sql = neon(env.DATABASE_URL)
 
@@ -674,10 +722,10 @@ async function handleDelete(
   `
 
   if (result.length === 0) {
-    return json({ error: 'Certificate not found' }, 404, cors)
+    return json({ error: 'Certificate not found', requestId }, 404, cors)
   }
 
-  return json({ deleted: true, id: result[0].id }, 200, cors)
+  return json({ deleted: true, id: result[0].id, requestId }, 200, cors)
 }
 
 // ============================================================
@@ -721,9 +769,14 @@ function parsePath(pathname: string): { action: 'list' | 'get' | 'create' | 'upd
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const startTime = Date.now()
+    const requestId = generateRequestId()
     const url = new URL(request.url)
     const origin = request.headers.get('Origin') ?? ''
     const cors = corsHeaders(origin, env.ALLOWED_ORIGIN)
+    let userId: string | null = null
+    let engineerId: string | null = null
+    let status = 200
 
     // CORS preflight
     if (request.method === 'OPTIONS') {
@@ -733,25 +786,58 @@ export default {
     // Parse route
     const route = parsePath(url.pathname)
     if (!route.action) {
-      return json({ error: 'Not found' }, 404, cors)
+      status = 404
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId: null,
+        message: 'Route not found',
+      })
+      return json({ error: 'Not found', requestId }, status, cors)
+    }
+
+    // READ_ONLY_MODE safety switch (blocks POST/PUT/DELETE, allows GET)
+    const isWriteOp = request.method === 'POST' || request.method === 'PUT' || request.method === 'DELETE'
+    if (env.READ_ONLY_MODE === 'true' && isWriteOp) {
+      status = 503
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId: null,
+        message: 'Read-only mode active — write operation blocked',
+      })
+      return json(
+        { success: false, error: 'Service temporarily in read-only mode', code: 'READ_ONLY', requestId },
+        status, cors
+      )
     }
 
     // Authenticate
-    const clerkUserId = await verifyClerkJWT(
+    userId = await verifyClerkJWT(
       request.headers.get('Authorization'),
       env.CLERK_JWKS_URL
     )
 
-    if (!clerkUserId) {
-      return json({ error: 'Unauthorized' }, 401, cors)
+    if (!userId) {
+      status = 401
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId: null,
+        message: 'JWT verification failed',
+      })
+      return json({ error: 'Unauthorized', requestId }, status, cors)
     }
 
     // Rate limit
     try {
       const limiter = createRateLimiter(env)
-      const { success } = await limiter.limit(clerkUserId)
+      const { success } = await limiter.limit(userId)
       if (!success) {
-        return json({ error: 'Too many requests' }, 429, cors)
+        status = 429
+        structuredLog({
+          requestId, route: url.pathname, method: request.method,
+          status, latencyMs: Date.now() - startTime, userId,
+          message: 'Rate limited',
+        })
+        return json({ error: 'Too many requests', code: 'RATE_LIMITED', requestId }, status, cors)
       }
     } catch {
       // Rate limiter failure should not block requests
@@ -759,38 +845,59 @@ export default {
 
     // Resolve engineer_id
     const sql = neon(env.DATABASE_URL)
-    const engineerId = await getEngineerId(sql, clerkUserId)
+    engineerId = await getEngineerId(sql, userId)
 
     if (!engineerId) {
-      return json({ error: 'Engineer profile not found. Complete settings first.' }, 400, cors)
+      status = 400
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId, engineerId: null,
+        message: 'Engineer profile not found',
+      })
+      return json({ error: 'Engineer profile not found. Complete settings first.', requestId }, status, cors)
     }
 
     try {
+      let response: Response
+
       // Route to handler
       if (route.action === 'list' && request.method === 'GET') {
-        return await handleList(engineerId, env, cors, url)
+        response = await handleList(engineerId, env, cors, url, requestId)
+      } else if (route.action === 'get' && request.method === 'GET' && route.certId) {
+        response = await handleGet(engineerId, route.certId, env, cors, requestId)
+      } else if (route.action === 'list' && request.method === 'POST') {
+        response = await handleCreate(engineerId, request, env, cors, requestId)
+      } else if (route.action === 'get' && request.method === 'PUT' && route.certId) {
+        response = await handleUpdate(engineerId, route.certId, request, env, cors, requestId)
+      } else if (route.action === 'get' && request.method === 'DELETE' && route.certId) {
+        response = await handleDelete(engineerId, route.certId, env, cors, requestId)
+      } else {
+        status = 405
+        structuredLog({
+          requestId, route: url.pathname, method: request.method,
+          status, latencyMs: Date.now() - startTime, userId, engineerId,
+          message: 'Method not allowed',
+        })
+        return json({ error: 'Method not allowed', requestId }, status, cors)
       }
 
-      if (route.action === 'get' && request.method === 'GET' && route.certId) {
-        return await handleGet(engineerId, route.certId, env, cors)
-      }
+      status = response.status
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId, engineerId,
+        message: `${request.method} ${route.action}${route.certId ? ` ${route.certId.slice(0, 8)}…` : ''}`,
+      })
 
-      if (route.action === 'list' && request.method === 'POST') {
-        return await handleCreate(engineerId, request, env, cors)
-      }
-
-      if (route.action === 'get' && request.method === 'PUT' && route.certId) {
-        return await handleUpdate(engineerId, route.certId, request, env, cors)
-      }
-
-      if (route.action === 'get' && request.method === 'DELETE' && route.certId) {
-        return await handleDelete(engineerId, route.certId, env, cors)
-      }
-
-      return json({ error: 'Method not allowed' }, 405, cors)
+      return response
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Internal server error'
-      return json({ error: message }, 500, cors)
+      status = 500
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId, engineerId,
+        error: message,
+      })
+      return json({ error: 'Internal server error', requestId }, status, cors)
     }
   },
 }
