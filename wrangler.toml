@@ -89,4 +89,3 @@ main = "workers/certificates-crud.ts"
 [env.certificates-crud.vars]
 ALLOWED_ORIGIN = "https://certvoice.co.uk"
 
-# trigger deploy
