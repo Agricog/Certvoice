@@ -11,7 +11,9 @@
  *   POST /api/stripe/webhook         — Stripe webhook handler
  *
  * Auth: Clerk JWT on customer-facing endpoints.
- * Webhook: Stripe signature verification (no Clerk auth).
+ * Webhook: Stripe signature verification (no Clerk auth) + idempotency.
+ * Rate limit: 30 requests/hour per engineer via Upstash.
+ * Guard: requestId, structured logs, safety switches per Build Standard v3.
  *
  * Deploy: wrangler deploy (separate from Railway frontend)
  *
@@ -19,6 +21,8 @@
  */
 
 import { neon } from '@neondatabase/serverless'
+import { Ratelimit } from '@upstash/ratelimit'
+import { Redis } from '@upstash/redis/cloudflare'
 
 // ============================================================
 // TYPES
@@ -31,6 +35,10 @@ interface Env {
   STRIPE_SECRET_KEY: string
   STRIPE_WEBHOOK_SECRET: string
   STRIPE_PRICE_ID: string
+  UPSTASH_REDIS_REST_URL: string
+  UPSTASH_REDIS_REST_TOKEN: string
+  READ_ONLY_MODE?: string
+  WEBHOOKS_PAUSED?: string
 }
 
 interface ClerkJWTPayload {
@@ -46,6 +54,35 @@ interface SubscriptionResponse {
   cancelAtPeriodEnd: boolean
   amount: number
   currency: string
+}
+
+interface StructuredLog {
+  requestId: string
+  route: string
+  method: string
+  status: number
+  latencyMs: number
+  userId: string | null
+  message?: string
+  error?: string
+}
+
+// ============================================================
+// GUARD HELPERS
+// ============================================================
+
+function generateRequestId(): string {
+  const timestamp = Date.now().toString(36)
+  const random = crypto.randomUUID().slice(0, 8)
+  return `cv-stripe-${timestamp}-${random}`
+}
+
+function structuredLog(log: StructuredLog): void {
+  console.log(JSON.stringify({
+    ...log,
+    service: 'certvoice-stripe-subscription',
+    timestamp: new Date().toISOString(),
+  }))
 }
 
 // ============================================================
@@ -127,6 +164,53 @@ async function verifyClerkJWT(
 }
 
 // ============================================================
+// RATE LIMITING
+// ============================================================
+
+function createRateLimiter(env: Env): Ratelimit {
+  return new Ratelimit({
+    redis: new Redis({
+      url: env.UPSTASH_REDIS_REST_URL,
+      token: env.UPSTASH_REDIS_REST_TOKEN,
+    }),
+    limiter: Ratelimit.slidingWindow(30, '3600 s'),
+    prefix: 'certvoice:stripe',
+  })
+}
+
+// ============================================================
+// WEBHOOK IDEMPOTENCY — Upstash Redis
+// Stripe can retry webhooks for up to 72 hours.
+// We store processed event IDs with 96-hour TTL.
+// ============================================================
+
+async function isEventProcessed(eventId: string, env: Env): Promise<boolean> {
+  try {
+    const redis = new Redis({
+      url: env.UPSTASH_REDIS_REST_URL,
+      token: env.UPSTASH_REDIS_REST_TOKEN,
+    })
+    const existing = await redis.get(`certvoice:webhook:${eventId}`)
+    return existing !== null
+  } catch {
+    return false // Fail open — process rather than drop
+  }
+}
+
+async function markEventProcessed(eventId: string, env: Env): Promise<void> {
+  try {
+    const redis = new Redis({
+      url: env.UPSTASH_REDIS_REST_URL,
+      token: env.UPSTASH_REDIS_REST_TOKEN,
+    })
+    // 96 hours TTL (Stripe retries up to 72hrs, plus buffer)
+    await redis.set(`certvoice:webhook:${eventId}`, '1', { ex: 96 * 3600 })
+  } catch {
+    // Non-critical — worst case is a duplicate process
+  }
+}
+
+// ============================================================
 // STRIPE HELPERS (REST API — no SDK needed in Workers)
 // ============================================================
 
@@ -150,283 +234,6 @@ async function stripeRequest(
 
   const response = await fetch(`https://api.stripe.com/v1${path}`, options)
   return (await response.json()) as Record<string, unknown>
-}
-
-// ============================================================
-// HANDLERS
-// ============================================================
-
-/**
- * GET /api/stripe/subscription
- * Returns current subscription status for the authenticated engineer.
- */
-async function handleGetSubscription(
-  clerkUserId: string,
-  env: Env,
-  cors: Record<string, string>
-): Promise<Response> {
-  const sql = neon(env.DATABASE_URL)
-
-  const rows = await sql`
-    SELECT subscription_status, subscription_plan, stripe_customer_id,
-           trial_ends_at, current_period_end
-    FROM engineers
-    WHERE clerk_user_id = ${clerkUserId}
-    LIMIT 1
-  `
-
-  if (rows.length === 0) {
-    return json({ status: 'none' }, 404, cors)
-  }
-
-  const row = rows[0]
-  const status = (row.subscription_status as string) ?? 'none'
-
-  // If active/trialing, fetch live status from Stripe for accuracy
-  if (row.stripe_customer_id && (status === 'active' || status === 'trialing')) {
-    try {
-      const subs = await stripeRequest(
-        `/subscriptions?customer=${row.stripe_customer_id}&status=all&limit=1`,
-        env.STRIPE_SECRET_KEY,
-        'GET'
-      )
-
-      const subData = (subs.data as Array<Record<string, unknown>>)?.[0]
-      if (subData) {
-        const response: SubscriptionResponse = {
-          status: subData.status as string,
-          planName: 'CertVoice Pro',
-          currentPeriodEnd: subData.current_period_end
-            ? new Date((subData.current_period_end as number) * 1000).toISOString()
-            : null,
-          trialEnd: subData.trial_end
-            ? new Date((subData.trial_end as number) * 1000).toISOString()
-            : null,
-          cancelAtPeriodEnd: (subData.cancel_at_period_end as boolean) ?? false,
-          amount: 2999,
-          currency: 'gbp',
-        }
-        return json(response, 200, cors)
-      }
-    } catch {
-      // Fall through to DB data if Stripe call fails
-    }
-  }
-
-  const response: SubscriptionResponse = {
-    status,
-    planName: 'CertVoice Pro',
-    currentPeriodEnd: row.current_period_end
-      ? new Date(row.current_period_end as string).toISOString()
-      : null,
-    trialEnd: row.trial_ends_at
-      ? new Date(row.trial_ends_at as string).toISOString()
-      : null,
-    cancelAtPeriodEnd: false,
-    amount: 2999,
-    currency: 'gbp',
-  }
-
-  return json(response, 200, cors)
-}
-
-/**
- * POST /api/stripe/checkout
- * Creates a Stripe Checkout Session with 14-day trial.
- * Returns { url } for frontend redirect.
- */
-async function handleCheckout(
-  clerkUserId: string,
-  request: Request,
-  env: Env,
-  cors: Record<string, string>
-): Promise<Response> {
-  const body = (await request.json()) as { successUrl: string; cancelUrl: string }
-  const sql = neon(env.DATABASE_URL)
-
-  // Get or create Stripe customer
-  const rows = await sql`
-    SELECT id, stripe_customer_id, email, full_name
-    FROM engineers
-    WHERE clerk_user_id = ${clerkUserId}
-    LIMIT 1
-  `
-
-  if (rows.length === 0) {
-    return json({ error: 'Engineer not found. Complete settings first.' }, 400, cors)
-  }
-
-  const engineer = rows[0]
-  let customerId = engineer.stripe_customer_id as string | null
-
-  if (!customerId) {
-    // Create Stripe customer
-    const customer = await stripeRequest('/customers', env.STRIPE_SECRET_KEY, 'POST', {
-      email: (engineer.email as string) ?? '',
-      name: (engineer.full_name as string) ?? '',
-      'metadata[clerk_user_id]': clerkUserId,
-      'metadata[engineer_id]': engineer.id as string,
-    })
-
-    customerId = customer.id as string
-
-    // Store customer ID
-    await sql`
-      UPDATE engineers
-      SET stripe_customer_id = ${customerId}
-      WHERE clerk_user_id = ${clerkUserId}
-    `
-  }
-
-  // Create Checkout Session with 14-day trial
-  const session = await stripeRequest(
-    '/checkout/sessions',
-    env.STRIPE_SECRET_KEY,
-    'POST',
-    {
-      'customer': customerId,
-      'mode': 'subscription',
-      'line_items[0][price]': env.STRIPE_PRICE_ID,
-      'line_items[0][quantity]': '1',
-      'subscription_data[trial_period_days]': '14',
-      'subscription_data[metadata][clerk_user_id]': clerkUserId,
-      'success_url': body.successUrl,
-      'cancel_url': body.cancelUrl,
-      'allow_promotion_codes': 'true',
-    }
-  )
-
-  if (!session.url) {
-    return json({ error: 'Failed to create checkout session' }, 500, cors)
-  }
-
-  return json({ url: session.url as string }, 200, cors)
-}
-
-/**
- * POST /api/stripe/billing-portal
- * Creates a Stripe Billing Portal session.
- * Returns { url } for frontend redirect.
- */
-async function handleBillingPortal(
-  clerkUserId: string,
-  request: Request,
-  env: Env,
-  cors: Record<string, string>
-): Promise<Response> {
-  const body = (await request.json()) as { returnUrl: string }
-  const sql = neon(env.DATABASE_URL)
-
-  const rows = await sql`
-    SELECT stripe_customer_id
-    FROM engineers
-    WHERE clerk_user_id = ${clerkUserId}
-    LIMIT 1
-  `
-
-  if (rows.length === 0 || !rows[0].stripe_customer_id) {
-    return json({ error: 'No active subscription found.' }, 400, cors)
-  }
-
-  const session = await stripeRequest(
-    '/billing_portal/sessions',
-    env.STRIPE_SECRET_KEY,
-    'POST',
-    {
-      customer: rows[0].stripe_customer_id as string,
-      return_url: body.returnUrl,
-    }
-  )
-
-  if (!session.url) {
-    return json({ error: 'Failed to create billing portal session' }, 500, cors)
-  }
-
-  return json({ url: session.url as string }, 200, cors)
-}
-
-/**
- * POST /api/stripe/webhook
- * Handles Stripe webhook events to keep Neon in sync.
- * No Clerk auth — uses Stripe signature verification.
- */
-async function handleWebhook(
-  request: Request,
-  env: Env,
-  cors: Record<string, string>
-): Promise<Response> {
-  const signature = request.headers.get('stripe-signature')
-  if (!signature) {
-    return json({ error: 'Missing signature' }, 400, cors)
-  }
-
-  const rawBody = await request.text()
-
-  // Verify Stripe signature
-  const verified = await verifyStripeSignature(rawBody, signature, env.STRIPE_WEBHOOK_SECRET)
-  if (!verified) {
-    return json({ error: 'Invalid signature' }, 400, cors)
-  }
-
-  const event = JSON.parse(rawBody) as {
-    type: string
-    data: { object: Record<string, unknown> }
-  }
-
-  const sql = neon(env.DATABASE_URL)
-  const obj = event.data.object
-
-  switch (event.type) {
-    case 'customer.subscription.created':
-    case 'customer.subscription.updated': {
-      const customerId = obj.customer as string
-      const status = obj.status as string
-      const trialEnd = obj.trial_end
-        ? new Date((obj.trial_end as number) * 1000).toISOString()
-        : null
-      const periodEnd = obj.current_period_end
-        ? new Date((obj.current_period_end as number) * 1000).toISOString()
-        : null
-
-      await sql`
-        UPDATE engineers
-        SET subscription_status = ${status},
-            trial_ends_at = ${trialEnd},
-            current_period_end = ${periodEnd}
-        WHERE stripe_customer_id = ${customerId}
-      `
-      break
-    }
-
-    case 'customer.subscription.deleted': {
-      const customerId = obj.customer as string
-
-      await sql`
-        UPDATE engineers
-        SET subscription_status = 'canceled',
-            current_period_end = NULL
-        WHERE stripe_customer_id = ${customerId}
-      `
-      break
-    }
-
-    case 'invoice.payment_failed': {
-      const customerId = obj.customer as string
-
-      await sql`
-        UPDATE engineers
-        SET subscription_status = 'past_due'
-        WHERE stripe_customer_id = ${customerId}
-      `
-      break
-    }
-
-    default:
-      // Unhandled event type — acknowledge receipt
-      break
-  }
-
-  return json({ received: true }, 200, cors)
 }
 
 // ============================================================
@@ -483,61 +290,464 @@ async function verifyStripeSignature(
 }
 
 // ============================================================
+// HANDLERS
+// ============================================================
+
+/**
+ * GET /api/stripe/subscription
+ * Returns current subscription status for the authenticated engineer.
+ */
+async function handleGetSubscription(
+  clerkUserId: string,
+  env: Env,
+  cors: Record<string, string>,
+  requestId: string
+): Promise<Response> {
+  const sql = neon(env.DATABASE_URL)
+
+  const rows = await sql`
+    SELECT subscription_status, subscription_plan, stripe_customer_id,
+           trial_ends_at, current_period_end
+    FROM engineers
+    WHERE clerk_user_id = ${clerkUserId}
+    LIMIT 1
+  `
+
+  if (rows.length === 0) {
+    return json({ status: 'none', requestId }, 404, cors)
+  }
+
+  const row = rows[0]
+  const status = (row.subscription_status as string) ?? 'none'
+
+  // If active/trialing, fetch live status from Stripe for accuracy
+  if (row.stripe_customer_id && (status === 'active' || status === 'trialing')) {
+    try {
+      const subs = await stripeRequest(
+        `/subscriptions?customer=${row.stripe_customer_id}&status=all&limit=1`,
+        env.STRIPE_SECRET_KEY,
+        'GET'
+      )
+
+      const subData = (subs.data as Array<Record<string, unknown>>)?.[0]
+      if (subData) {
+        const response: SubscriptionResponse = {
+          status: subData.status as string,
+          planName: 'CertVoice Pro',
+          currentPeriodEnd: subData.current_period_end
+            ? new Date((subData.current_period_end as number) * 1000).toISOString()
+            : null,
+          trialEnd: subData.trial_end
+            ? new Date((subData.trial_end as number) * 1000).toISOString()
+            : null,
+          cancelAtPeriodEnd: (subData.cancel_at_period_end as boolean) ?? false,
+          amount: 2999,
+          currency: 'gbp',
+        }
+        return json({ ...response, requestId }, 200, cors)
+      }
+    } catch {
+      // Fall through to DB data if Stripe call fails
+    }
+  }
+
+  const response: SubscriptionResponse = {
+    status,
+    planName: 'CertVoice Pro',
+    currentPeriodEnd: row.current_period_end
+      ? new Date(row.current_period_end as string).toISOString()
+      : null,
+    trialEnd: row.trial_ends_at
+      ? new Date(row.trial_ends_at as string).toISOString()
+      : null,
+    cancelAtPeriodEnd: false,
+    amount: 2999,
+    currency: 'gbp',
+  }
+
+  return json({ ...response, requestId }, 200, cors)
+}
+
+/**
+ * POST /api/stripe/checkout
+ * Creates a Stripe Checkout Session with 14-day trial.
+ * Returns { url } for frontend redirect.
+ */
+async function handleCheckout(
+  clerkUserId: string,
+  request: Request,
+  env: Env,
+  cors: Record<string, string>,
+  requestId: string
+): Promise<Response> {
+  const body = (await request.json()) as { successUrl: string; cancelUrl: string }
+  const sql = neon(env.DATABASE_URL)
+
+  // Get or create Stripe customer
+  const rows = await sql`
+    SELECT id, stripe_customer_id, email, full_name
+    FROM engineers
+    WHERE clerk_user_id = ${clerkUserId}
+    LIMIT 1
+  `
+
+  if (rows.length === 0) {
+    return json({ error: 'Engineer not found. Complete settings first.', requestId }, 400, cors)
+  }
+
+  const engineer = rows[0]
+  let customerId = engineer.stripe_customer_id as string | null
+
+  if (!customerId) {
+    // Create Stripe customer
+    const customer = await stripeRequest('/customers', env.STRIPE_SECRET_KEY, 'POST', {
+      email: (engineer.email as string) ?? '',
+      name: (engineer.full_name as string) ?? '',
+      'metadata[clerk_user_id]': clerkUserId,
+      'metadata[engineer_id]': engineer.id as string,
+    })
+
+    customerId = customer.id as string
+
+    // Store customer ID
+    await sql`
+      UPDATE engineers
+      SET stripe_customer_id = ${customerId}
+      WHERE clerk_user_id = ${clerkUserId}
+    `
+  }
+
+  // Create Checkout Session with 14-day trial
+  const session = await stripeRequest(
+    '/checkout/sessions',
+    env.STRIPE_SECRET_KEY,
+    'POST',
+    {
+      'customer': customerId,
+      'mode': 'subscription',
+      'line_items[0][price]': env.STRIPE_PRICE_ID,
+      'line_items[0][quantity]': '1',
+      'subscription_data[trial_period_days]': '14',
+      'subscription_data[metadata][clerk_user_id]': clerkUserId,
+      'success_url': body.successUrl,
+      'cancel_url': body.cancelUrl,
+      'allow_promotion_codes': 'true',
+    }
+  )
+
+  if (!session.url) {
+    return json({ error: 'Failed to create checkout session', requestId }, 500, cors)
+  }
+
+  return json({ url: session.url as string, requestId }, 200, cors)
+}
+
+/**
+ * POST /api/stripe/billing-portal
+ * Creates a Stripe Billing Portal session.
+ * Returns { url } for frontend redirect.
+ */
+async function handleBillingPortal(
+  clerkUserId: string,
+  request: Request,
+  env: Env,
+  cors: Record<string, string>,
+  requestId: string
+): Promise<Response> {
+  const body = (await request.json()) as { returnUrl: string }
+  const sql = neon(env.DATABASE_URL)
+
+  const rows = await sql`
+    SELECT stripe_customer_id
+    FROM engineers
+    WHERE clerk_user_id = ${clerkUserId}
+    LIMIT 1
+  `
+
+  if (rows.length === 0 || !rows[0].stripe_customer_id) {
+    return json({ error: 'No active subscription found.', requestId }, 400, cors)
+  }
+
+  const session = await stripeRequest(
+    '/billing_portal/sessions',
+    env.STRIPE_SECRET_KEY,
+    'POST',
+    {
+      customer: rows[0].stripe_customer_id as string,
+      return_url: body.returnUrl,
+    }
+  )
+
+  if (!session.url) {
+    return json({ error: 'Failed to create billing portal session', requestId }, 500, cors)
+  }
+
+  return json({ url: session.url as string, requestId }, 200, cors)
+}
+
+/**
+ * POST /api/stripe/webhook
+ * Handles Stripe webhook events to keep Neon in sync.
+ * No Clerk auth — uses Stripe signature verification.
+ * Idempotent — duplicate event IDs are skipped via Upstash Redis.
+ */
+async function handleWebhook(
+  request: Request,
+  env: Env,
+  cors: Record<string, string>,
+  requestId: string
+): Promise<Response> {
+  const signature = request.headers.get('stripe-signature')
+  if (!signature) {
+    return json({ error: 'Missing signature', requestId }, 400, cors)
+  }
+
+  const rawBody = await request.text()
+
+  // Verify Stripe signature
+  const verified = await verifyStripeSignature(rawBody, signature, env.STRIPE_WEBHOOK_SECRET)
+  if (!verified) {
+    return json({ error: 'Invalid signature', requestId }, 400, cors)
+  }
+
+  const event = JSON.parse(rawBody) as {
+    id: string
+    type: string
+    data: { object: Record<string, unknown> }
+  }
+
+  // Idempotency check — skip if already processed
+  const alreadyProcessed = await isEventProcessed(event.id, env)
+  if (alreadyProcessed) {
+    structuredLog({
+      requestId, route: '/api/stripe/webhook', method: 'POST',
+      status: 200, latencyMs: 0, userId: null,
+      message: `Duplicate webhook skipped: ${event.id} (${event.type})`,
+    })
+    return json({ received: true, duplicate: true, requestId }, 200, cors)
+  }
+
+  const sql = neon(env.DATABASE_URL)
+  const obj = event.data.object
+
+  switch (event.type) {
+    case 'customer.subscription.created':
+    case 'customer.subscription.updated': {
+      const customerId = obj.customer as string
+      const status = obj.status as string
+      const trialEnd = obj.trial_end
+        ? new Date((obj.trial_end as number) * 1000).toISOString()
+        : null
+      const periodEnd = obj.current_period_end
+        ? new Date((obj.current_period_end as number) * 1000).toISOString()
+        : null
+
+      await sql`
+        UPDATE engineers
+        SET subscription_status = ${status},
+            trial_ends_at = ${trialEnd},
+            current_period_end = ${periodEnd}
+        WHERE stripe_customer_id = ${customerId}
+      `
+      break
+    }
+
+    case 'customer.subscription.deleted': {
+      const customerId = obj.customer as string
+
+      await sql`
+        UPDATE engineers
+        SET subscription_status = 'canceled',
+            current_period_end = NULL
+        WHERE stripe_customer_id = ${customerId}
+      `
+      break
+    }
+
+    case 'invoice.payment_failed': {
+      const customerId = obj.customer as string
+
+      await sql`
+        UPDATE engineers
+        SET subscription_status = 'past_due'
+        WHERE stripe_customer_id = ${customerId}
+      `
+      break
+    }
+
+    default:
+      // Unhandled event type — acknowledge receipt
+      break
+  }
+
+  // Mark event as processed (idempotency)
+  await markEventProcessed(event.id, env)
+
+  return json({ received: true, requestId }, 200, cors)
+}
+
+// ============================================================
 // WORKER ENTRY
 // ============================================================
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const startTime = Date.now()
+    const requestId = generateRequestId()
     const url = new URL(request.url)
     const origin = request.headers.get('Origin') ?? ''
     const cors = corsHeaders(origin, env.ALLOWED_ORIGIN)
+    const path = url.pathname
+    let userId: string | null = null
+    let status = 200
 
     // CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: cors })
     }
 
-    const path = url.pathname
-
-    // Webhook — no Clerk auth, uses Stripe signature
+    // ── Webhook route (no Clerk auth, uses Stripe signature) ──
     if (path === '/api/stripe/webhook' && request.method === 'POST') {
+      // WEBHOOKS_PAUSED safety switch
+      if (env.WEBHOOKS_PAUSED === 'true') {
+        status = 503
+        structuredLog({
+          requestId, route: path, method: 'POST',
+          status, latencyMs: Date.now() - startTime, userId: null,
+          message: 'Webhooks paused — event not processed',
+        })
+        return json(
+          { success: false, error: 'Webhooks temporarily paused', code: 'WEBHOOKS_PAUSED', requestId },
+          status, cors
+        )
+      }
+
       try {
-        return await handleWebhook(request, env, cors)
+        const response = await handleWebhook(request, env, cors, requestId)
+        status = response.status
+        structuredLog({
+          requestId, route: path, method: 'POST',
+          status, latencyMs: Date.now() - startTime, userId: null,
+          message: status === 200 ? 'Webhook processed' : 'Webhook rejected',
+        })
+        return response
       } catch (error) {
-        return json({ error: 'Webhook processing failed' }, 500, cors)
+        const message = error instanceof Error ? error.message : 'Webhook processing failed'
+        status = 500
+        structuredLog({
+          requestId, route: path, method: 'POST',
+          status, latencyMs: Date.now() - startTime, userId: null,
+          error: message,
+        })
+        return json({ error: 'Webhook processing failed', requestId }, status, cors)
       }
     }
 
-    // All other endpoints require Clerk auth
-    const clerkUserId = await verifyClerkJWT(
+    // ── Customer-facing routes (Clerk auth required) ──
+
+    // Validate route exists before auth
+    const validPaths = ['/api/stripe/subscription', '/api/stripe/checkout', '/api/stripe/billing-portal']
+    if (!validPaths.includes(path)) {
+      status = 404
+      structuredLog({
+        requestId, route: path, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId: null,
+        message: 'Route not found',
+      })
+      return json({ error: 'Not found', requestId }, status, cors)
+    }
+
+    // READ_ONLY_MODE safety switch (blocks checkout/billing-portal, allows subscription reads)
+    const isWriteOp = request.method === 'POST'
+    if (env.READ_ONLY_MODE === 'true' && isWriteOp) {
+      status = 503
+      structuredLog({
+        requestId, route: path, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId: null,
+        message: 'Read-only mode active — write operation blocked',
+      })
+      return json(
+        { success: false, error: 'Service temporarily in read-only mode', code: 'READ_ONLY', requestId },
+        status, cors
+      )
+    }
+
+    // Authenticate via Clerk JWT
+    userId = await verifyClerkJWT(
       request.headers.get('Authorization'),
       env.CLERK_JWKS_URL
     )
 
-    if (!clerkUserId) {
-      return json({ error: 'Unauthorized' }, 401, cors)
+    if (!userId) {
+      status = 401
+      structuredLog({
+        requestId, route: path, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId: null,
+        message: 'JWT verification failed',
+      })
+      return json({ error: 'Unauthorized', requestId }, status, cors)
+    }
+
+    // Rate limit
+    try {
+      const limiter = createRateLimiter(env)
+      const { success } = await limiter.limit(userId)
+      if (!success) {
+        status = 429
+        structuredLog({
+          requestId, route: path, method: request.method,
+          status, latencyMs: Date.now() - startTime, userId,
+          message: 'Rate limited',
+        })
+        return json({ error: 'Too many requests', code: 'RATE_LIMITED', requestId }, status, cors)
+      }
+    } catch {
+      // Rate limiter failure should not block the request
     }
 
     try {
+      let response: Response
+
       // GET /api/stripe/subscription
       if (path === '/api/stripe/subscription' && request.method === 'GET') {
-        return await handleGetSubscription(clerkUserId, env, cors)
+        response = await handleGetSubscription(userId, env, cors, requestId)
       }
-
       // POST /api/stripe/checkout
-      if (path === '/api/stripe/checkout' && request.method === 'POST') {
-        return await handleCheckout(clerkUserId, request, env, cors)
+      else if (path === '/api/stripe/checkout' && request.method === 'POST') {
+        response = await handleCheckout(userId, request, env, cors, requestId)
       }
-
       // POST /api/stripe/billing-portal
-      if (path === '/api/stripe/billing-portal' && request.method === 'POST') {
-        return await handleBillingPortal(clerkUserId, request, env, cors)
+      else if (path === '/api/stripe/billing-portal' && request.method === 'POST') {
+        response = await handleBillingPortal(userId, request, env, cors, requestId)
+      }
+      // Method not allowed
+      else {
+        status = 405
+        structuredLog({
+          requestId, route: path, method: request.method,
+          status, latencyMs: Date.now() - startTime, userId,
+          message: 'Method not allowed',
+        })
+        return json({ error: 'Method not allowed', requestId }, status, cors)
       }
 
-      return json({ error: 'Not found' }, 404, cors)
+      status = response.status
+      structuredLog({
+        requestId, route: path, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId,
+        message: `${request.method} ${path.split('/').pop()}`,
+      })
+
+      return response
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Internal server error'
-      return json({ error: message }, 500, cors)
+      status = 500
+      structuredLog({
+        requestId, route: path, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId,
+        error: message,
+      })
+      return json({ error: 'Internal server error', requestId }, status, cors)
     }
   },
 }
