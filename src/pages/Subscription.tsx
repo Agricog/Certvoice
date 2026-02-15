@@ -2,7 +2,7 @@
  * CertVoice — Subscription Page
  *
  * Stripe integration for CertVoice Pro subscription.
- * Single plan: £29.99/month with 14-day free trial.
+ * Tiered pricing: Solo £29.99/mo (active), Team/Business (coming soon).
  *
  * Features:
  *   - Plan display with feature comparison
@@ -19,6 +19,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Helmet } from 'react-helmet-async'
 import { Link } from 'react-router-dom'
+import { useAuth } from '@clerk/clerk-react'
 import { loadStripe } from '@stripe/stripe-js'
 import {
   ArrowLeft,
@@ -49,8 +50,11 @@ type SubscriptionStatus =
   | 'incomplete'
   | 'none'
 
+type PlanTier = 'solo' | 'team' | 'business' | 'enterprise'
+
 interface SubscriptionInfo {
   status: SubscriptionStatus
+  planTier: PlanTier
   planName: string
   currentPeriodEnd: string | null
   trialEnd: string | null
@@ -85,6 +89,8 @@ const stripePromise = STRIPE_PUBLIC_KEY ? loadStripe(STRIPE_PUBLIC_KEY) : null
 // ============================================================
 
 export default function Subscription() {
+  const { getToken } = useAuth()
+
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [checkoutLoading, setCheckoutLoading] = useState<boolean>(false)
@@ -94,14 +100,16 @@ export default function Subscription() {
   // ---- Load subscription status ----
   useEffect(() => {
     loadSubscription()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const loadSubscription = async () => {
     setLoading(true)
     try {
+      const token = await getToken()
       const response = await fetch(SUBSCRIPTION_API, {
         method: 'GET',
-        credentials: 'include',
+        headers: { Authorization: `Bearer ${token}` },
       })
 
       if (response.ok) {
@@ -130,11 +138,15 @@ export default function Subscription() {
     setError(null)
 
     try {
+      const token = await getToken()
       const response = await fetch(CHECKOUT_API, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
+          tier: 'solo',
           successUrl: `${window.location.origin}/subscription?success=true`,
           cancelUrl: `${window.location.origin}/subscription?canceled=true`,
         }),
@@ -155,7 +167,7 @@ export default function Subscription() {
     } finally {
       setCheckoutLoading(false)
     }
-  }, [])
+  }, [getToken])
 
   // ---- Open Billing Portal ----
   const handleBillingPortal = useCallback(async () => {
@@ -163,10 +175,13 @@ export default function Subscription() {
     setError(null)
 
     try {
+      const token = await getToken()
       const response = await fetch(BILLING_API, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           returnUrl: `${window.location.origin}/subscription`,
         }),
@@ -184,7 +199,7 @@ export default function Subscription() {
     } finally {
       setPortalLoading(false)
     }
-  }, [])
+  }, [getToken])
 
   // ---- Helpers ----
   const isActive = subscription?.status === 'active' || subscription?.status === 'trialing'
@@ -203,6 +218,10 @@ export default function Subscription() {
         year: 'numeric',
       })
     : null
+
+  const planAmount = subscription?.amount
+    ? `£${(subscription.amount / 100).toFixed(2)}`
+    : '£29.99'
 
   const trackEvent = (action: string) => {
     try {
@@ -293,7 +312,9 @@ export default function Subscription() {
                   <Crown className="w-5 h-5 text-certvoice-accent" />
                 </div>
                 <div>
-                  <h2 className="text-sm font-bold text-certvoice-text">CertVoice Pro</h2>
+                  <h2 className="text-sm font-bold text-certvoice-text">
+                    {subscription.planName || 'CertVoice Pro'}
+                  </h2>
                   <div className="flex items-center gap-2">
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
                       subscription.status === 'trialing'
@@ -318,7 +339,7 @@ export default function Subscription() {
                     {trialDaysRemaining} day{trialDaysRemaining !== 1 ? 's' : ''} remaining on your free trial
                   </p>
                   <p className="text-[10px] text-certvoice-muted mt-0.5">
-                    Your card will be charged £29.99/month when the trial ends.
+                    Your card will be charged {planAmount}/month when the trial ends.
                   </p>
                 </div>
               )}
@@ -327,7 +348,7 @@ export default function Subscription() {
               <div className="space-y-2 text-xs text-certvoice-muted">
                 <div className="flex justify-between">
                   <span>Plan</span>
-                  <span className="text-certvoice-text font-semibold">£29.99/month</span>
+                  <span className="text-certvoice-text font-semibold">{planAmount}/month</span>
                 </div>
                 {periodEndFormatted && (
                   <div className="flex justify-between">
