@@ -75,3 +75,8 @@ bucket_name = "certvoice-storage"
 [env.stripe-subscription]
 name = "certvoice-stripe-subscription"
 main = "workers/stripe-subscription.ts"
+
+# --- 6. Certificates CRUD ---
+[env.certificates-crud]
+name = "certvoice-certificates-crud"
+main = "workers/certificates-crud.ts"
