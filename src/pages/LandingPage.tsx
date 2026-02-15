@@ -36,7 +36,6 @@ import {
   Users,
   Award,
   Timer,
-  Building2,
   Mail,
 } from 'lucide-react'
 
