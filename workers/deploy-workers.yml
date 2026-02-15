@@ -1,0 +1,68 @@
+# ============================================================
+# CertVoice — Deploy Cloudflare Workers
+#
+# Triggers on push to main when any file in workers/ changes.
+# Deploys each worker independently using wrangler.
+#
+# Required GitHub Secrets:
+#   CLOUDFLARE_API_TOKEN   — CF API token with Workers edit permission
+#   CLOUDFLARE_ACCOUNT_ID  — Your CF account ID
+#
+# Worker secrets (DATABASE_URL, STRIPE_SECRET_KEY, etc.)
+# are set in Cloudflare Dashboard, NOT in this workflow.
+# ============================================================
+
+name: Deploy Workers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/**'
+      - 'wrangler.toml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy Cloudflare Workers
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install wrangler
+        run: npm install -g wrangler
+
+      - name: Deploy Claude Proxy
+        run: wrangler deploy --env claude-proxy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy PDF Generator
+        run: wrangler deploy --env pdf-generate
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy R2 Upload
+        run: wrangler deploy --env r2-upload
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy Engineer Settings
+        run: wrangler deploy --env engineer-settings
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy Stripe Subscription
+        run: wrangler deploy --env stripe-subscription
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
