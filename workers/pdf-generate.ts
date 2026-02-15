@@ -6,8 +6,10 @@
  *
  * Uses pdf-lib (V8 isolate compatible, no Node.js APIs).
  *
+ * Guard: requestId, structured logs, JWT auth, safety switches per Build Standard v3.
+ *
  * Deploy: Cloudflare Workers (NOT Railway)
- * Endpoint: POST /api/generate-pdf
+ * Endpoint: POST /api/pdf/generate
  *
  * @module workers/pdf-generate
  */
@@ -21,6 +23,8 @@ import {
   PageSizes,
   type RGB,
 } from 'pdf-lib'
+import { Ratelimit } from '@upstash/ratelimit'
+import { Redis } from '@upstash/redis/cloudflare'
 
 // ============================================================
 // TYPES — mirrors eicr.ts (inline to avoid import issues in Worker)
@@ -262,10 +266,148 @@ interface GenerateOptions {
 
 interface Env {
   ALLOWED_ORIGIN: string
-  CLERK_SECRET_KEY: string
-  CERTVOICE_BUCKET: R2Bucket
+  CLERK_JWKS_URL: string
   UPSTASH_REDIS_REST_URL: string
   UPSTASH_REDIS_REST_TOKEN: string
+  CERTVOICE_BUCKET: R2Bucket
+  READ_ONLY_MODE?: string
+}
+
+interface ClerkJWTPayload {
+  sub: string
+  exp: number
+  iat: number
+  nbf: number
+  iss: string
+  azp?: string
+}
+
+interface StructuredLog {
+  requestId: string
+  route: string
+  method: string
+  status: number
+  latencyMs: number
+  userId: string | null
+  message?: string
+  error?: string
+}
+
+// ============================================================
+// GUARD HELPERS
+// ============================================================
+
+function generateRequestId(): string {
+  const timestamp = Date.now().toString(36)
+  const random = crypto.randomUUID().slice(0, 8)
+  return `cv-pdf-${timestamp}-${random}`
+}
+
+function structuredLog(log: StructuredLog): void {
+  console.log(JSON.stringify({
+    ...log,
+    service: 'certvoice-pdf-generate',
+    timestamp: new Date().toISOString(),
+  }))
+}
+
+// ============================================================
+// AUTH — Clerk JWT verification (matches claude-proxy pattern)
+// ============================================================
+
+async function verifyClerkJWT(
+  authHeader: string | null,
+  jwksUrl: string
+): Promise<string | null> {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null
+
+  const token = authHeader.slice(7)
+
+  try {
+    const headerB64 = token.split('.')[0]
+    if (!headerB64) return null
+
+    const headerJson = JSON.parse(atob(headerB64.replace(/-/g, '+').replace(/_/g, '/')))
+    const kid: string = headerJson.kid
+    if (!kid) return null
+
+    const jwksResponse = await fetch(jwksUrl)
+    if (!jwksResponse.ok) return null
+
+    const jwks = (await jwksResponse.json()) as { keys: Array<{ kid: string; kty: string; n: string; e: string }> }
+    const jwk = jwks.keys.find((k) => k.kid === kid)
+    if (!jwk) return null
+
+    const publicKey = await crypto.subtle.importKey(
+      'jwk',
+      { kty: jwk.kty, n: jwk.n, e: jwk.e, alg: 'RS256', ext: true },
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false,
+      ['verify']
+    )
+
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+
+    const data = new TextEncoder().encode(`${parts[0]}.${parts[1]}`)
+    const signature = Uint8Array.from(
+      atob(parts[2].replace(/-/g, '+').replace(/_/g, '/')),
+      (c) => c.charCodeAt(0)
+    )
+
+    const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', publicKey, signature, data)
+    if (!valid) return null
+
+    const payloadB64 = parts[1]
+    if (!payloadB64) return null
+
+    const payload: ClerkJWTPayload = JSON.parse(
+      atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/'))
+    )
+
+    const now = Math.floor(Date.now() / 1000)
+    if (payload.exp < now) return null
+
+    return payload.sub
+  } catch {
+    return null
+  }
+}
+
+// ============================================================
+// RATE LIMITING (Upstash — consistent with claude-proxy)
+// ============================================================
+
+function createRateLimiter(env: Env): Ratelimit {
+  return new Ratelimit({
+    redis: new Redis({
+      url: env.UPSTASH_REDIS_REST_URL,
+      token: env.UPSTASH_REDIS_REST_TOKEN,
+    }),
+    limiter: Ratelimit.slidingWindow(20, '3600 s'),
+    prefix: 'certvoice:pdf',
+  })
+}
+
+// ============================================================
+// CORS
+// ============================================================
+
+function corsHeaders(origin: string, allowedOrigin: string): Record<string, string> {
+  const isAllowed = origin === allowedOrigin
+  return {
+    'Access-Control-Allow-Origin': isAllowed ? origin : '',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Max-Age': '86400',
+  }
+}
+
+function corsResponse(origin: string, allowedOrigin: string): Response {
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders(origin, allowedOrigin),
+  })
 }
 
 // ============================================================
@@ -984,7 +1126,6 @@ function renderObservationsPage(ctx: DrawContext, cert: EICRCertificate): void {
   drawSectionHeader(ctx, 'Section K — Observations and Recommendations')
 
   // Code legend
-  const legendY = ctx.y
   drawRect(ctx.currentPage, MARGIN.left, ctx.y - 52, CONTENT_WIDTH, 52, COLOURS.rowAlt, COLOURS.lightGrey)
   ctx.y -= 10
   for (const [code, def] of Object.entries(CODE_DEFINITIONS) as Array<[ClassificationCode, { label: string; definition: string }]>) {
@@ -1081,9 +1222,6 @@ function renderInspectionSchedule(ctx: DrawContext, cert: EICRCertificate): void
     // Section header row
     if (item.section !== lastSection) {
       ensureSpace(ctx, rowH * 2 + 4)
-      if (ctx.y > A4_HEIGHT - MARGIN.top - 10 || lastSection === -1) {
-        // Don't redraw schedule header for first section
-      }
       lastSection = item.section
 
       // Section title row
@@ -1132,7 +1270,7 @@ function renderCircuitSchedule(ctx: DrawContext, cert: EICRCertificate): void {
     if (boardCircuits.length === 0) continue
 
     // Landscape page for circuit schedule
-    const page = createPage(ctx, true)
+    createPage(ctx, true)
     const pageW = A4_HEIGHT  // landscape
     const pageH = A4_WIDTH
     const contentW = pageW - MARGIN.left - MARGIN.right
@@ -1152,37 +1290,37 @@ function renderCircuitSchedule(ctx: DrawContext, cert: EICRCertificate): void {
 
     // Column definitions — abbreviated headers
     const circuitCols = [
-      { header: 'Cct', width: 22 },         // 1
-      { header: 'Description', width: 60 },  // 2
-      { header: 'Type', width: 18 },         // 3
-      { header: 'Ref', width: 16 },          // 4
-      { header: 'Pts', width: 18 },          // 5
-      { header: 'Live', width: 22 },         // 6
-      { header: 'CPC', width: 22 },          // 7
-      { header: 'tmax', width: 20 },         // 8
-      { header: 'BS', width: 24 },           // 9
-      { header: 'Ty', width: 14 },           // 10
-      { header: 'In', width: 18 },           // 11
-      { header: 'Zs max', width: 26 },       // 12
-      { header: 'Icn', width: 20 },          // 13
-      { header: 'RCD BS', width: 24 },       // 14
-      { header: 'RCD Ty', width: 22 },       // 15
-      { header: 'IΔn', width: 20 },          // 16
-      { header: 'r1', width: 22 },           // 17
-      { header: 'rn', width: 22 },           // 18
-      { header: 'r2', width: 22 },           // 19
-      { header: 'R1R2', width: 24 },         // 20
-      { header: 'R1R2/', width: 24 },        // 21
-      { header: 'R2', width: 22 },           // 22
-      { header: 'Vt', width: 18 },           // 23
-      { header: 'IR LL', width: 24 },        // 24
-      { header: 'IR LE', width: 24 },        // 25
-      { header: 'Zs', width: 24 },           // 26
-      { header: 'Pol', width: 18 },          // 27
-      { header: 'RCD t', width: 24 },        // 28
-      { header: 'Btn', width: 18 },          // 29
-      { header: 'AFDD', width: 20 },         // 30
-      { header: 'Remarks', width: 0 },       // 31 — takes remaining
+      { header: 'Cct', width: 22 },
+      { header: 'Description', width: 60 },
+      { header: 'Type', width: 18 },
+      { header: 'Ref', width: 16 },
+      { header: 'Pts', width: 18 },
+      { header: 'Live', width: 22 },
+      { header: 'CPC', width: 22 },
+      { header: 'tmax', width: 20 },
+      { header: 'BS', width: 24 },
+      { header: 'Ty', width: 14 },
+      { header: 'In', width: 18 },
+      { header: 'Zs max', width: 26 },
+      { header: 'Icn', width: 20 },
+      { header: 'RCD BS', width: 24 },
+      { header: 'RCD Ty', width: 22 },
+      { header: 'IΔn', width: 20 },
+      { header: 'r1', width: 22 },
+      { header: 'rn', width: 22 },
+      { header: 'r2', width: 22 },
+      { header: 'R1R2', width: 24 },
+      { header: 'R1R2/', width: 24 },
+      { header: 'R2', width: 22 },
+      { header: 'Vt', width: 18 },
+      { header: 'IR LL', width: 24 },
+      { header: 'IR LE', width: 24 },
+      { header: 'Zs', width: 24 },
+      { header: 'Pol', width: 18 },
+      { header: 'RCD t', width: 24 },
+      { header: 'Btn', width: 18 },
+      { header: 'AFDD', width: 20 },
+      { header: 'Remarks', width: 0 },
     ]
 
     // Calculate remaining width for remarks
@@ -1216,37 +1354,37 @@ function renderCircuitSchedule(ctx: DrawContext, cert: EICRCertificate): void {
       }
 
       const vals: string[] = [
-        circuit.circuitNumber,                              // 1
-        circuit.circuitDescription,                         // 2
-        circuit.wiringType ?? '',                            // 3
-        circuit.referenceMethod ?? '',                       // 4
-        formatNum(circuit.numberOfPoints),                   // 5
-        formatNum(circuit.liveConductorCsa),                 // 6
-        formatNum(circuit.cpcCsa),                           // 7
-        formatNum(circuit.maxDisconnectTime),                // 8
-        circuit.ocpdBsEn,                                    // 9
-        circuit.ocpdType ?? '',                              // 10
-        formatNum(circuit.ocpdRating),                       // 11
-        formatNum(circuit.maxPermittedZs),                   // 12
-        formatNum(circuit.breakingCapacity),                 // 13
-        circuit.rcdBsEn,                                     // 14
-        circuit.rcdType ?? '',                               // 15
-        formatNum(circuit.rcdRating),                        // 16
-        formatTestValue(circuit.r1),                         // 17
-        formatTestValue(circuit.rn),                         // 18
-        formatTestValue(circuit.r2),                         // 19
-        formatTestValue(circuit.r1r2),                       // 20
-        formatTestValue(circuit.r1r2OrR2),                   // 21
-        formatTestValue(circuit.r2Standalone),               // 22
-        formatNum(circuit.irTestVoltage),                    // 23
-        formatTestValue(circuit.irLiveLive),                 // 24
-        formatTestValue(circuit.irLiveEarth),                // 25
-        formatNum(circuit.zs),                               // 26
-        formatTick(circuit.polarity),                        // 27
-        formatNum(circuit.rcdDisconnectionTime),             // 28
-        formatTick(circuit.rcdTestButton),                   // 29
-        formatTick(circuit.afddTestButton),                  // 30
-        circuit.remarks,                                     // 31
+        circuit.circuitNumber,
+        circuit.circuitDescription,
+        circuit.wiringType ?? '',
+        circuit.referenceMethod ?? '',
+        formatNum(circuit.numberOfPoints),
+        formatNum(circuit.liveConductorCsa),
+        formatNum(circuit.cpcCsa),
+        formatNum(circuit.maxDisconnectTime),
+        circuit.ocpdBsEn,
+        circuit.ocpdType ?? '',
+        formatNum(circuit.ocpdRating),
+        formatNum(circuit.maxPermittedZs),
+        formatNum(circuit.breakingCapacity),
+        circuit.rcdBsEn,
+        circuit.rcdType ?? '',
+        formatNum(circuit.rcdRating),
+        formatTestValue(circuit.r1),
+        formatTestValue(circuit.rn),
+        formatTestValue(circuit.r2),
+        formatTestValue(circuit.r1r2),
+        formatTestValue(circuit.r1r2OrR2),
+        formatTestValue(circuit.r2Standalone),
+        formatNum(circuit.irTestVoltage),
+        formatTestValue(circuit.irLiveLive),
+        formatTestValue(circuit.irLiveEarth),
+        formatNum(circuit.zs),
+        formatTick(circuit.polarity),
+        formatNum(circuit.rcdDisconnectionTime),
+        formatTick(circuit.rcdTestButton),
+        formatTick(circuit.afddTestButton),
+        circuit.remarks,
       ]
 
       let x = MARGIN.left
@@ -1362,140 +1500,137 @@ async function generatePDF(cert: EICRCertificate): Promise<Uint8Array> {
 }
 
 // ============================================================
-// SECURITY: Rate Limiting (Upstash Redis)
-// ============================================================
-
-async function checkRateLimit(userId: string, env: Env): Promise<boolean> {
-  try {
-    const key = `certvoice:pdf:${userId}`
-    const response = await fetch(`${env.UPSTASH_REDIS_REST_URL}/multi-exec`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.UPSTASH_REDIS_REST_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify([
-        ['INCR', key],
-        ['EXPIRE', key, 3600],
-      ]),
-    })
-    const data = (await response.json()) as Array<{ result: number }>
-    const count = data?.[0]?.result ?? 0
-    return count <= 20
-  } catch {
-    // If Redis is down, allow the request
-    return true
-  }
-}
-
-// ============================================================
-// SECURITY: Clerk Token Verification
-// ============================================================
-
-async function verifyClerkToken(token: string, env: Env): Promise<string | null> {
-  try {
-    const response = await fetch('https://api.clerk.com/v1/sessions/verify', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.CLERK_SECRET_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ token }),
-    })
-    if (!response.ok) return null
-    const data = (await response.json()) as { user_id?: string }
-    return data.user_id ?? null
-  } catch {
-    return null
-  }
-}
-
-// ============================================================
-// CORS
-// ============================================================
-
-function corsHeaders(origin: string, allowedOrigin: string): Record<string, string> {
-  const isAllowed = origin === allowedOrigin || allowedOrigin === '*'
-  return {
-    'Access-Control-Allow-Origin': isAllowed ? origin : '',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Max-Age': '86400',
-  }
-}
-
-// ============================================================
 // WORKER ENTRY POINT
 // ============================================================
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const startTime = Date.now()
+    const requestId = generateRequestId()
+    const url = new URL(request.url)
     const origin = request.headers.get('Origin') ?? ''
     const cors = corsHeaders(origin, env.ALLOWED_ORIGIN)
+    let userId: string | null = null
+    let status = 200
 
-    // Handle CORS preflight
+    // CORS preflight
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: cors })
+      return corsResponse(origin, env.ALLOWED_ORIGIN)
     }
 
     // Only POST
     if (request.method !== 'POST') {
+      status = 405
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId: null,
+        message: 'Method not allowed',
+      })
       return new Response(
-        JSON.stringify({ error: 'Method not allowed' }),
-        { status: 405, headers: { ...cors, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'Method not allowed', requestId }),
+        { status, headers: { ...cors, 'Content-Type': 'application/json' } }
       )
     }
 
+    // READ_ONLY_MODE safety switch
+    if (env.READ_ONLY_MODE === 'true') {
+      status = 503
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId: null,
+        message: 'Read-only mode active',
+      })
+      return new Response(
+        JSON.stringify({ success: false, error: 'Service temporarily in read-only mode', code: 'READ_ONLY', requestId }),
+        { status, headers: { ...cors, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Authenticate via Clerk JWT
+    userId = await verifyClerkJWT(
+      request.headers.get('Authorization'),
+      env.CLERK_JWKS_URL
+    )
+
+    if (!userId) {
+      status = 401
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId: null,
+        message: 'JWT verification failed',
+      })
+      return new Response(
+        JSON.stringify({ error: 'Authentication required', requestId }),
+        { status, headers: { ...cors, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Rate limit (20 PDFs/hr via Upstash)
     try {
-      // Authenticate
-      const authHeader = request.headers.get('Authorization')
-      if (!authHeader?.startsWith('Bearer ')) {
+      const limiter = createRateLimiter(env)
+      const { success } = await limiter.limit(userId)
+      if (!success) {
+        status = 429
+        structuredLog({
+          requestId, route: url.pathname, method: request.method,
+          status, latencyMs: Date.now() - startTime, userId,
+          message: 'Rate limited',
+        })
         return new Response(
-          JSON.stringify({ error: 'Authentication required' }),
-          { status: 401, headers: { ...cors, 'Content-Type': 'application/json' } }
+          JSON.stringify({ error: 'Rate limit exceeded. Max 20 PDFs per hour.', code: 'RATE_LIMITED', requestId }),
+          { status, headers: { ...cors, 'Content-Type': 'application/json' } }
         )
       }
+    } catch {
+      // Rate limiter failure should not block the request
+    }
 
-      const token = authHeader.slice(7)
-      const userId = await verifyClerkToken(token, env)
-      if (!userId) {
-        return new Response(
-          JSON.stringify({ error: 'Invalid session' }),
-          { status: 401, headers: { ...cors, 'Content-Type': 'application/json' } }
-        )
-      }
+    // Parse body
+    let body: { certificate: EICRCertificate; options?: Partial<GenerateOptions> }
+    try {
+      body = (await request.json()) as { certificate: EICRCertificate; options?: Partial<GenerateOptions> }
+    } catch {
+      status = 400
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId,
+        message: 'Invalid JSON body',
+      })
+      return new Response(
+        JSON.stringify({ error: 'Invalid JSON', code: 'INVALID_INPUT', requestId }),
+        { status, headers: { ...cors, 'Content-Type': 'application/json' } }
+      )
+    }
 
-      // Rate limit
-      const withinLimit = await checkRateLimit(userId, env)
-      if (!withinLimit) {
-        return new Response(
-          JSON.stringify({ error: 'Rate limit exceeded. Max 20 PDFs per hour.' }),
-          { status: 429, headers: { ...cors, 'Content-Type': 'application/json' } }
-        )
-      }
+    if (!body.certificate?.id || !body.certificate?.reportNumber) {
+      status = 400
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId,
+        message: 'Missing certificate id or reportNumber',
+      })
+      return new Response(
+        JSON.stringify({ error: 'Invalid certificate data', code: 'INVALID_INPUT', requestId }),
+        { status, headers: { ...cors, 'Content-Type': 'application/json' } }
+      )
+    }
 
-      // Parse body
-      const body = (await request.json()) as {
-        certificate: EICRCertificate
-        options?: Partial<GenerateOptions>
-      }
+    // Verify ownership — engineer can only generate PDFs for their own certificates
+    if (body.certificate.engineerId !== userId) {
+      status = 403
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId,
+        message: `Tenant violation: userId=${userId} attempted cert owned by ${body.certificate.engineerId}`,
+      })
+      return new Response(
+        JSON.stringify({ error: 'Access denied', requestId }),
+        { status, headers: { ...cors, 'Content-Type': 'application/json' } }
+      )
+    }
 
-      if (!body.certificate?.id || !body.certificate?.reportNumber) {
-        return new Response(
-          JSON.stringify({ error: 'Invalid certificate data' }),
-          { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } }
-        )
-      }
-
-      // Verify ownership
-      if (body.certificate.engineerId !== userId) {
-        return new Response(
-          JSON.stringify({ error: 'Access denied' }),
-          { status: 403, headers: { ...cors, 'Content-Type': 'application/json' } }
-        )
-      }
-
-      // Generate PDF
+    // Generate PDF
+    try {
       const pdfBytes = await generatePDF(body.certificate)
       const outputFormat = body.options?.outputFormat ?? 'buffer'
 
@@ -1511,16 +1646,25 @@ export default {
           },
         })
 
+        structuredLog({
+          requestId, route: url.pathname, method: request.method,
+          status: 200, latencyMs: Date.now() - startTime, userId,
+          message: `PDF uploaded to R2: ${pdfKey} (${pdfBytes.length} bytes)`,
+        })
+
         return new Response(
-          JSON.stringify({ pdfKey, size: pdfBytes.length }),
-          {
-            status: 200,
-            headers: { ...cors, 'Content-Type': 'application/json' },
-          }
+          JSON.stringify({ pdfKey, size: pdfBytes.length, requestId }),
+          { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } }
         )
       }
 
       // Return binary PDF
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status: 200, latencyMs: Date.now() - startTime, userId,
+        message: `PDF generated: ${body.certificate.reportNumber} (${pdfBytes.length} bytes)`,
+      })
+
       return new Response(pdfBytes, {
         status: 200,
         headers: {
@@ -1532,9 +1676,17 @@ export default {
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'PDF generation failed'
+      status = 500
+
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId,
+        error: message,
+      })
+
       return new Response(
-        JSON.stringify({ error: 'Internal server error' }),
-        { status: 500, headers: { ...cors, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'PDF generation failed', code: 'GENERATION_ERROR', requestId }),
+        { status, headers: { ...cors, 'Content-Type': 'application/json' } }
       )
     }
   },
