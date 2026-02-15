@@ -52,14 +52,14 @@ export interface ApiResponse<T> {
  */
 async function getAuthToken(): Promise<string | null> {
   try {
+    const win = window as unknown as Record<string, unknown>
+
     // Clerk exposes itself on window when ClerkProvider is mounted
-    const clerk = (window as Record<string, unknown>).__clerk_frontend_api
-      ? (window as Record<string, unknown>).Clerk
-      : null
+    const clerk = win.__clerk_frontend_api ? win.Clerk : null
 
     if (!clerk) {
       // Try the newer Clerk SDK pattern
-      const clerkInstance = (window as Record<string, unknown>).Clerk as
+      const clerkInstance = win.Clerk as
         | { session?: { getToken: () => Promise<string> } }
         | undefined
 
