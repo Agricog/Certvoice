@@ -141,7 +141,7 @@ export default function NewInspection() {
         }
         const nameResult = validateInput(clientDetails.clientName, 'text', 200)
         if (!nameResult.isValid) {
-          newErrors.clientName = Object.values(nameResult.errors)[0]
+          newErrors.clientName = Object.values(nameResult.errors)[0] ?? 'Invalid input'
         }
         break
       }
@@ -223,16 +223,16 @@ export default function NewInspection() {
         reportNumber: `CV-${Date.now().toString(36).toUpperCase()}`,
         status,
         clientDetails: {
-          clientName: sanitizeText(clientDetails.clientName),
-          clientAddress: sanitizeText(clientDetails.clientAddress),
+          clientName: sanitizeText(clientDetails.clientName) ?? '',
+          clientAddress: sanitizeText(clientDetails.clientAddress) ?? '',
         },
         reportReason: {
           purpose: reportReason.purpose,
           inspectionDates: reportReason.inspectionDates,
         },
         installationDetails: {
-          installationAddress: sanitizeText(installationDetails.installationAddress),
-          occupier: sanitizeText(installationDetails.occupier),
+          installationAddress: sanitizeText(installationDetails.installationAddress) ?? '',
+          occupier: sanitizeText(installationDetails.occupier) ?? '',
           premisesType: installationDetails.premisesType,
           otherDescription: installationDetails.otherDescription
             ? sanitizeText(installationDetails.otherDescription)
@@ -244,10 +244,10 @@ export default function NewInspection() {
           dateOfLastInspection: installationDetails.dateOfLastInspection,
         },
         extentAndLimitations: {
-          extentCovered: sanitizeText(extentAndLimitations.extentCovered),
-          agreedLimitations: sanitizeText(extentAndLimitations.agreedLimitations),
-          agreedWith: sanitizeText(extentAndLimitations.agreedWith),
-          operationalLimitations: sanitizeText(extentAndLimitations.operationalLimitations),
+          extentCovered: sanitizeText(extentAndLimitations.extentCovered) ?? '',
+          agreedLimitations: sanitizeText(extentAndLimitations.agreedLimitations) ?? '',
+          agreedWith: sanitizeText(extentAndLimitations.agreedWith) ?? '',
+          operationalLimitations: sanitizeText(extentAndLimitations.operationalLimitations) ?? '',
         },
         observations: [],
         distributionBoards: [],
@@ -821,6 +821,7 @@ export default function NewInspection() {
   // ============================================================
 
   const stepRenderers = [renderSectionA, renderSectionB, renderSectionC, renderSectionD, renderReview]
+  const CurrentStepRenderer = stepRenderers[currentStep]
 
   return (
     <>
@@ -855,7 +856,7 @@ export default function NewInspection() {
 
         {/* Step Content */}
         <div className="cv-panel">
-          {stepRenderers[currentStep]()}
+          {CurrentStepRenderer ? <CurrentStepRenderer /> : null}
         </div>
 
         {/* Navigation Buttons */}
