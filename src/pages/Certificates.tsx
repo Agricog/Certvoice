@@ -31,6 +31,7 @@ import type {
   ClassificationCode,
 } from '../types/eicr'
 import { captureError } from '../utils/errorTracking'
+import { api } from '../services/api'
 
 // ============================================================
 // TYPES
@@ -155,27 +156,20 @@ export default function Certificates() {
     loadCertificates()
   }, [])
 
-  const loadCertificates = async () => {
+const loadCertificates = async () => {
     setLoading(true)
     setError(null)
 
     try {
-      const response = await fetch(API_URL, {
-        method: 'GET',
-        credentials: 'include',
-      })
+      const { data, error: apiError } = await api.get<Partial<EICRCertificate>[]>(API_URL)
 
-      if (response.ok) {
-        const data = (await response.json()) as Partial<EICRCertificate>[]
+      if (data && !apiError) {
         setCertificates(data.map(mapCertToListItem))
-      } else if (response.status === 404 || response.status === 401) {
-        // No certs or not authenticated yet — show empty state
-        setCertificates([])
       } else {
-        throw new Error(`Failed to load certificates (${response.status})`)
+        // API not available or auth issue — show empty state
+        setCertificates([])
       }
     } catch (err) {
-      // API not wired yet — show empty state gracefully
       captureError(err, 'Certificates.loadCertificates')
       setCertificates([])
       setError(null)
