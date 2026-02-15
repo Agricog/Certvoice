@@ -10,13 +10,13 @@
  *
  * Auth: Clerk JWT verified from Authorization header.
  * Rate limit: 60 requests/hour per engineer via Upstash.
+ * Guard: requestId, structured logs, safety switches per Build Standard v3.
  *
  * Deploy: wrangler deploy --env claude-proxy
  *
  * @module workers/claude-proxy
  */
 
-import { neon } from '@neondatabase/serverless'
 import { Ratelimit } from '@upstash/ratelimit'
 import { Redis } from '@upstash/redis/cloudflare'
 
@@ -31,6 +31,7 @@ interface Env {
   UPSTASH_REDIS_REST_URL: string
   UPSTASH_REDIS_REST_TOKEN: string
   ANTHROPIC_API_KEY: string
+  READ_ONLY_MODE?: string
 }
 
 interface ClerkJWTPayload {
@@ -60,6 +61,36 @@ interface ExtractionResult {
   observation?: Record<string, unknown>
   supply?: Record<string, unknown>
   warnings: string[]
+}
+
+interface StructuredLog {
+  requestId: string
+  route: string
+  method: string
+  status: number
+  latencyMs: number
+  userId: string | null
+  engineerId: string | null
+  message?: string
+  error?: string
+}
+
+// ============================================================
+// GUARD HELPERS
+// ============================================================
+
+function generateRequestId(): string {
+  const timestamp = Date.now().toString(36)
+  const random = crypto.randomUUID().slice(0, 8)
+  return `cv-ext-${timestamp}-${random}`
+}
+
+function structuredLog(log: StructuredLog): void {
+  console.log(JSON.stringify({
+    ...log,
+    service: 'certvoice-claude-proxy',
+    timestamp: new Date().toISOString(),
+  }))
 }
 
 // ============================================================
@@ -252,7 +283,6 @@ supplyType, nominalVoltage, nominalFrequency, loopImpedanceZe, pscc, pefc, earth
 
 async function callClaude(
   prompt: string,
-  transcript: string,
   apiKey: string
 ): Promise<ExtractionResult> {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -319,9 +349,13 @@ async function callClaude(
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const startTime = Date.now()
+    const requestId = generateRequestId()
     const url = new URL(request.url)
     const origin = request.headers.get('Origin') ?? ''
     const cors = corsHeaders(origin, env.ALLOWED_ORIGIN)
+    let userId: string | null = null
+    let status = 200
 
     // CORS preflight
     if (request.method === 'OPTIONS') {
@@ -330,45 +364,84 @@ export default {
 
     // Only handle /api/extract
     if (url.pathname !== '/api/extract') {
-      return new Response(JSON.stringify({ error: 'Not found' }), {
-        status: 404,
+      status = 404
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime,
+        userId: null, engineerId: null, message: 'Route not found',
+      })
+      return new Response(JSON.stringify({ error: 'Not found', requestId }), {
+        status,
         headers: { 'Content-Type': 'application/json', ...cors },
       })
     }
 
     // Only POST
     if (request.method !== 'POST') {
-      return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-        status: 405,
+      status = 405
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime,
+        userId: null, engineerId: null, message: 'Method not allowed',
+      })
+      return new Response(JSON.stringify({ error: 'Method not allowed', requestId }), {
+        status,
         headers: { 'Content-Type': 'application/json', ...cors },
       })
     }
 
+    // READ_ONLY_MODE safety switch
+    if (env.READ_ONLY_MODE === 'true') {
+      status = 503
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime,
+        userId: null, engineerId: null, message: 'Read-only mode active',
+      })
+      return new Response(
+        JSON.stringify({ success: false, error: 'Service temporarily in read-only mode', code: 'READ_ONLY', requestId }),
+        { status, headers: { 'Content-Type': 'application/json', ...cors } }
+      )
+    }
+
     // Authenticate via Clerk JWT
-    const clerkUserId = await verifyClerkJWT(
+    userId = await verifyClerkJWT(
       request.headers.get('Authorization'),
       env.CLERK_JWKS_URL
     )
 
-    if (!clerkUserId) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
+    if (!userId) {
+      status = 401
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime,
+        userId: null, engineerId: null, message: 'JWT verification failed',
+      })
+      return new Response(JSON.stringify({ error: 'Unauthorized', requestId }), {
+        status,
         headers: { 'Content-Type': 'application/json', ...cors },
       })
     }
 
-    // Rate limit
+    // Rate limit (keyed by Clerk userId)
     try {
       const limiter = createRateLimiter(env)
-      const { success } = await limiter.limit(clerkUserId)
+      const { success } = await limiter.limit(userId)
       if (!success) {
+        status = 429
+        structuredLog({
+          requestId, route: url.pathname, method: request.method,
+          status, latencyMs: Date.now() - startTime,
+          userId, engineerId: null, message: 'Rate limited',
+        })
         return new Response(
           JSON.stringify({
             success: false,
             error: 'Too many requests. Try again later.',
             code: 'RATE_LIMITED',
+            requestId,
           }),
-          { status: 429, headers: { 'Content-Type': 'application/json', ...cors } }
+          { status, headers: { 'Content-Type': 'application/json', ...cors } }
         )
       }
     } catch {
@@ -380,38 +453,63 @@ export default {
     try {
       body = await request.json()
     } catch {
+      status = 400
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime,
+        userId, engineerId: null, message: 'Invalid JSON body',
+      })
       return new Response(
-        JSON.stringify({ success: false, error: 'Invalid JSON', code: 'INVALID_INPUT' }),
-        { status: 400, headers: { 'Content-Type': 'application/json', ...cors } }
+        JSON.stringify({ success: false, error: 'Invalid JSON', code: 'INVALID_INPUT', requestId }),
+        { status, headers: { 'Content-Type': 'application/json', ...cors } }
       )
     }
 
     const validation = validateRequest(body)
     if (!validation.valid) {
+      status = 400
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime,
+        userId, engineerId: null, message: `Validation failed: ${validation.error}`,
+      })
       return new Response(
-        JSON.stringify({ success: false, error: validation.error, code: 'INVALID_INPUT' }),
-        { status: 400, headers: { 'Content-Type': 'application/json', ...cors } }
+        JSON.stringify({ success: false, error: validation.error, code: 'INVALID_INPUT', requestId }),
+        { status, headers: { 'Content-Type': 'application/json', ...cors } }
       )
     }
 
     // Build prompt and call Claude
     try {
       const prompt = buildExtractionPrompt(validation.data)
-      const result = await callClaude(prompt, validation.data.transcript, env.ANTHROPIC_API_KEY)
+      const result = await callClaude(prompt, env.ANTHROPIC_API_KEY)
 
-      return new Response(JSON.stringify(result), {
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status: 200, latencyMs: Date.now() - startTime,
+        userId, engineerId: null,
+        message: `Extraction OK: type=${result.type} confidence=${result.confidence}`,
+      })
+
+      return new Response(JSON.stringify({ ...result, requestId }), {
         status: 200,
         headers: { 'Content-Type': 'application/json', ...cors },
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Extraction failed'
-
-      // Distinguish parse failures from API errors
       const code = message.includes('Claude API error') ? 'API_ERROR' : 'PARSE_FAILED'
+      status = 500
+
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime,
+        userId, engineerId: null,
+        error: message,
+      })
 
       return new Response(
-        JSON.stringify({ success: false, error: message, code }),
-        { status: 500, headers: { 'Content-Type': 'application/json', ...cors } }
+        JSON.stringify({ success: false, error: message, code, requestId }),
+        { status, headers: { 'Content-Type': 'application/json', ...cors } }
       )
     }
   },
