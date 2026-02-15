@@ -107,16 +107,29 @@ export function useOffline(): OfflineStatus {
       }
     }
 
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.addEventListener('message', handleMessage)
-    }
-
-    return () => {
+    try {
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.removeEventListener('message', handleMessage)
+        navigator.serviceWorker.ready
+          .then((registration) => {
+            const reg = registration as ServiceWorkerRegistration & {
+              sync?: { register: (tag: string) => Promise<void> }
+            }
+            if (reg.sync) {
+              return reg.sync.register('sync-offline-requests')
+            }
+            fallbackManualSync()
+            return
+          })
+          .catch(() => {
+            fallbackManualSync()
+          })
+      } else {
+        fallbackManualSync()
       }
+    } catch {
+      syncingRef.current = false
+      setIsSyncing(false)
     }
-  }, [])
 
   // ---- Initial pending count ----
   useEffect(() => {
