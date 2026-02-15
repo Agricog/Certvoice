@@ -31,6 +31,8 @@ import Certificates from './pages/Certificates'
 import Settings from './pages/Settings'
 import Subscription from './pages/Subscription'
 import AuthPage from './pages/AuthPage'
+import PrivacyPolicy from './pages/PrivacyPolicy'
+import TermsOfService from './pages/TermsOfService'
 
 // --- Component imports ---
 import BottomNav from './components/BottomNav'
@@ -74,6 +76,8 @@ export default function App() {
           <Route path="/" element={<LandingPage />} />
           <Route path="/sign-in/*" element={<AuthPage mode="sign-in" />} />
           <Route path="/sign-up/*" element={<AuthPage mode="sign-up" />} />
+          <Route path="/privacy" element={<PrivacyPolicy />} />
+          <Route path="/terms" element={<TermsOfService />} />
 
           {/* Protected routes */}
           <Route path="/dashboard" element={<ProtectedRoute><Home /></ProtectedRoute>} />
