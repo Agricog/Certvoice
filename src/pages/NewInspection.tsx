@@ -40,7 +40,8 @@ import type {
   CertificateStatus,
 } from '../types/eicr'
 import { validateInput } from '../utils/validation'
-import { sanitizeText } from '../utils/sanitization'
+import { sanitizeText as _sanitizeText } from '../utils/sanitization'
+const sanitizeText = (input: string): string => String(_sanitizeText(input) ?? '')
 import { captureError } from '../utils/errorTracking'
 import { trackCertificateCreated } from '../utils/analytics'
 
