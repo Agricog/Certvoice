@@ -13,7 +13,6 @@
  * Auth: Clerk provider wraps all routes.
  * Monitoring: Sentry wraps Routes for performance tracking.
  */
-
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
 import * as Sentry from '@sentry/react'
 
@@ -25,13 +24,15 @@ import Certificates from './pages/Certificates'
 import Settings from './pages/Settings'
 import Subscription from './pages/Subscription'
 
+// --- Component imports ---
+import BottomNav from './components/BottomNav'
+
 // --- Sentry-wrapped Routes for performance monitoring ---
 const SentryRoutes = Sentry.withSentryReactRouterV6Routing(Routes)
 
 // ============================================================
 // 404
 // ============================================================
-
 function NotFound() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-certvoice-bg">
@@ -52,19 +53,24 @@ function NotFound() {
 // ============================================================
 // APP ROOT
 // ============================================================
-
 export default function App() {
   return (
     <BrowserRouter>
-      <SentryRoutes>
-        <Route path="/" element={<Home />} />
-        <Route path="/new" element={<NewInspection />} />
-        <Route path="/inspect/:id" element={<InspectionCapture />} />
-        <Route path="/certificates" element={<Certificates />} />
-        <Route path="/settings" element={<Settings />} />
-        <Route path="/subscription" element={<Subscription />} />
-        <Route path="*" element={<NotFound />} />
-      </SentryRoutes>
+      {/* Main content area — bottom padding clears the fixed nav */}
+      <div className="pb-20">
+        <SentryRoutes>
+          <Route path="/" element={<Home />} />
+          <Route path="/new" element={<NewInspection />} />
+          <Route path="/inspect/:id" element={<InspectionCapture />} />
+          <Route path="/certificates" element={<Certificates />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/subscription" element={<Subscription />} />
+          <Route path="*" element={<NotFound />} />
+        </SentryRoutes>
+      </div>
+
+      {/* Fixed bottom navigation — auto-hides on /inspect/:id */}
+      <BottomNav />
     </BrowserRouter>
   )
 }
