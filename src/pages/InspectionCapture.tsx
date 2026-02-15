@@ -36,6 +36,7 @@ import type {
   DistributionBoardHeader,
   SupplyCharacteristics,
   InstallationParticulars,
+  InspectionItem,
   InspectionOutcome,
   ClassificationCode,
 } from '../types/eicr'
@@ -173,11 +174,45 @@ export default function InspectionCapture() {
           if (editingCircuitIndex !== null) {
             existing[editingCircuitIndex] = { ...existing[editingCircuitIndex], ...circuit }
           } else {
-            existing.push({
-              id: crypto.randomUUID(),
-              ...circuit,
+            const newCircuit: CircuitDetail = {
+              id: circuit.id ?? crypto.randomUUID(),
               dbId: activeBoard?.dbReference ?? 'DB1',
-            } as CircuitDetail)
+              circuitNumber: circuit.circuitNumber ?? '',
+              circuitDescription: circuit.circuitDescription ?? '',
+              wiringType: circuit.wiringType ?? null,
+              referenceMethod: circuit.referenceMethod ?? null,
+              numberOfPoints: circuit.numberOfPoints ?? null,
+              liveConductorCsa: circuit.liveConductorCsa ?? null,
+              cpcCsa: circuit.cpcCsa ?? null,
+              maxDisconnectTime: circuit.maxDisconnectTime ?? null,
+              ocpdBsEn: circuit.ocpdBsEn ?? '',
+              ocpdType: circuit.ocpdType ?? null,
+              ocpdRating: circuit.ocpdRating ?? null,
+              maxPermittedZs: circuit.maxPermittedZs ?? null,
+              breakingCapacity: circuit.breakingCapacity ?? null,
+              rcdBsEn: circuit.rcdBsEn ?? '',
+              rcdType: circuit.rcdType ?? null,
+              rcdRating: circuit.rcdRating ?? null,
+              r1: circuit.r1 ?? null,
+              rn: circuit.rn ?? null,
+              r2: circuit.r2 ?? null,
+              r1r2: circuit.r1r2 ?? null,
+              r1r2OrR2: circuit.r1r2OrR2 ?? null,
+              r2Standalone: circuit.r2Standalone ?? null,
+              irTestVoltage: circuit.irTestVoltage ?? null,
+              irLiveLive: circuit.irLiveLive ?? null,
+              irLiveEarth: circuit.irLiveEarth ?? null,
+              zs: circuit.zs ?? null,
+              polarity: circuit.polarity ?? 'NA',
+              rcdDisconnectionTime: circuit.rcdDisconnectionTime ?? null,
+              rcdTestButton: circuit.rcdTestButton ?? 'NA',
+              afddTestButton: circuit.afddTestButton ?? 'NA',
+              remarks: circuit.remarks ?? '',
+              circuitType: circuit.circuitType ?? null,
+              status: circuit.status ?? 'INCOMPLETE',
+              validationWarnings: circuit.validationWarnings ?? [],
+            }
+            existing.push(newCircuit)
           }
           return { ...prev, circuits: existing, updatedAt: new Date().toISOString() }
         })
@@ -203,12 +238,19 @@ export default function InspectionCapture() {
           if (editingObsIndex !== null) {
             existing[editingObsIndex] = { ...existing[editingObsIndex], ...observation }
           } else {
-            existing.push({
-              id: crypto.randomUUID(),
-              ...observation,
+            const newObs: Observation = {
+              id: observation.id ?? crypto.randomUUID(),
               itemNumber: existing.length + 1,
+              observationText: observation.observationText ?? '',
+              classificationCode: observation.classificationCode ?? 'C3',
               dbReference: activeBoard?.dbReference ?? 'DB1',
-            } as Observation)
+              circuitReference: observation.circuitReference ?? '',
+              location: observation.location ?? '',
+              regulationReference: observation.regulationReference ?? '',
+              photoKeys: observation.photoKeys ?? [],
+              remedialAction: observation.remedialAction ?? '',
+            }
+            existing.push(newObs)
           }
           return { ...prev, observations: existing, updatedAt: new Date().toISOString() }
         })
