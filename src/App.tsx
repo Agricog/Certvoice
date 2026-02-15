@@ -2,15 +2,17 @@
  * CertVoice — Main Application Router
  *
  * Routes:
- *   /                    — Dashboard (Home)
- *   /new                 — Start new EICR inspection
- *   /inspect/:id         — Main capture workflow
- *   /certificates        — All completed certificates
- *   /settings            — Engineer profile, instruments, signature
- *   /subscription        — Stripe billing management
+ *   /sign-in             — Clerk sign-in (public)
+ *   /sign-up             — Clerk sign-up (public)
+ *   /                    — Dashboard (Home) (protected)
+ *   /new                 — Start new EICR inspection (protected)
+ *   /inspect/:id         — Main capture workflow (protected)
+ *   /certificates        — All completed certificates (protected)
+ *   /settings            — Engineer profile, instruments, signature (protected)
+ *   /subscription        — Stripe billing management (protected)
  *   *                    — 404 Not Found
  *
- * Auth: Clerk provider wraps all routes.
+ * Auth: Clerk provider in main.tsx, routes protected via ProtectedRoute.
  * Monitoring: Sentry wraps Routes for performance tracking.
  */
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
@@ -23,9 +25,11 @@ import InspectionCapture from './pages/InspectionCapture'
 import Certificates from './pages/Certificates'
 import Settings from './pages/Settings'
 import Subscription from './pages/Subscription'
+import AuthPage from './pages/AuthPage'
 
 // --- Component imports ---
 import BottomNav from './components/BottomNav'
+import ProtectedRoute from './components/ProtectedRoute'
 
 // --- Sentry-wrapped Routes for performance monitoring ---
 const SentryRoutes = Sentry.withSentryReactRouterV6Routing(Routes)
@@ -59,17 +63,23 @@ export default function App() {
       {/* Main content area — bottom padding clears the fixed nav */}
       <div className="pb-20">
         <SentryRoutes>
-          <Route path="/" element={<Home />} />
-          <Route path="/new" element={<NewInspection />} />
-          <Route path="/inspect/:id" element={<InspectionCapture />} />
-          <Route path="/certificates" element={<Certificates />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/subscription" element={<Subscription />} />
+          {/* Public auth routes */}
+          <Route path="/sign-in/*" element={<AuthPage mode="sign-in" />} />
+          <Route path="/sign-up/*" element={<AuthPage mode="sign-up" />} />
+
+          {/* Protected routes */}
+          <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
+          <Route path="/new" element={<ProtectedRoute><NewInspection /></ProtectedRoute>} />
+          <Route path="/inspect/:id" element={<ProtectedRoute><InspectionCapture /></ProtectedRoute>} />
+          <Route path="/certificates" element={<ProtectedRoute><Certificates /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+          <Route path="/subscription" element={<ProtectedRoute><Subscription /></ProtectedRoute>} />
+
           <Route path="*" element={<NotFound />} />
         </SentryRoutes>
       </div>
 
-      {/* Fixed bottom navigation — auto-hides on /inspect/:id */}
+      {/* Fixed bottom navigation — auto-hides on /inspect/:id and auth pages */}
       <BottomNav />
     </BrowserRouter>
   )
