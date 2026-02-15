@@ -25,7 +25,7 @@
 	@manifest path /manifest.json
 	header @manifest Cache-Control "public, max-age=3600"
 
-	root * /srv
+	root * /app/dist
 	try_files {path} /index.html
 	file_server
 }
