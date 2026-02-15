@@ -4,6 +4,9 @@
 # Deploys all Cloudflare Workers for CertVoice.
 # Each worker is defined as a separate environment.
 #
+# IMPORTANT: Wrangler does NOT inherit top-level vars/bindings
+# into environments. Each env must declare its own.
+#
 # Usage: Deployed via GitHub Action on push to main.
 #        Each worker deploys independently.
 #
@@ -18,21 +21,7 @@
 
 name = "certvoice-workers"
 compatibility_date = "2024-12-01"
-main = "workers/index.ts"
-
-# ---- Shared vars (non-secret, override per-environment if needed) ----
-[vars]
-ALLOWED_ORIGIN = "https://certvoice.co.uk"
-STRIPE_PRICE_ID = ""
-
-# ---- R2 Bucket binding (shared across workers) ----
-[[r2_buckets]]
-binding = "SIGNATURES_BUCKET"
-bucket_name = "certvoice-storage"
-
-[[r2_buckets]]
-binding = "STORAGE_BUCKET"
-bucket_name = "certvoice-storage"
+main = "workers/claude-proxy.ts"
 
 # ============================================================
 # WORKER ENVIRONMENTS
@@ -44,10 +33,16 @@ bucket_name = "certvoice-storage"
 name = "certvoice-claude-proxy"
 main = "workers/claude-proxy.ts"
 
+[env.claude-proxy.vars]
+ALLOWED_ORIGIN = "https://certvoice.co.uk"
+
 # --- 2. PDF Generator ---
 [env.pdf-generate]
 name = "certvoice-pdf-generate"
 main = "workers/pdf-generate.ts"
+
+[env.pdf-generate.vars]
+ALLOWED_ORIGIN = "https://certvoice.co.uk"
 
 [[env.pdf-generate.r2_buckets]]
 binding = "STORAGE_BUCKET"
@@ -58,6 +53,9 @@ bucket_name = "certvoice-storage"
 name = "certvoice-r2-upload"
 main = "workers/r2-upload.ts"
 
+[env.r2-upload.vars]
+ALLOWED_ORIGIN = "https://certvoice.co.uk"
+
 [[env.r2-upload.r2_buckets]]
 binding = "BUCKET"
 bucket_name = "certvoice-storage"
@@ -66,6 +64,9 @@ bucket_name = "certvoice-storage"
 [env.engineer-settings]
 name = "certvoice-engineer-settings"
 main = "workers/engineer-settings.ts"
+
+[env.engineer-settings.vars]
+ALLOWED_ORIGIN = "https://certvoice.co.uk"
 
 [[env.engineer-settings.r2_buckets]]
 binding = "SIGNATURES_BUCKET"
@@ -76,7 +77,14 @@ bucket_name = "certvoice-storage"
 name = "certvoice-stripe-subscription"
 main = "workers/stripe-subscription.ts"
 
+[env.stripe-subscription.vars]
+ALLOWED_ORIGIN = "https://certvoice.co.uk"
+STRIPE_PRICE_ID = ""
+
 # --- 6. Certificates CRUD ---
 [env.certificates-crud]
 name = "certvoice-certificates-crud"
 main = "workers/certificates-crud.ts"
+
+[env.certificates-crud.vars]
+ALLOWED_ORIGIN = "https://certvoice.co.uk"
