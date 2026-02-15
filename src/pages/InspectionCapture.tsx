@@ -172,7 +172,7 @@ export default function InspectionCapture() {
         setCertificate((prev) => {
           const existing = [...(prev.circuits ?? [])]
           if (editingCircuitIndex !== null) {
-            existing[editingCircuitIndex] = { ...existing[editingCircuitIndex], ...circuit }
+            existing[editingCircuitIndex] = { ...existing[editingCircuitIndex], ...circuit } as CircuitDetail
           } else {
             const newCircuit: CircuitDetail = {
               id: circuit.id ?? crypto.randomUUID(),
@@ -236,7 +236,7 @@ export default function InspectionCapture() {
         setCertificate((prev) => {
           const existing = [...(prev.observations ?? [])]
           if (editingObsIndex !== null) {
-            existing[editingObsIndex] = { ...existing[editingObsIndex], ...observation }
+            existing[editingObsIndex] = { ...existing[editingObsIndex], ...observation } as Observation
           } else {
             const newObs: Observation = {
               id: observation.id ?? crypto.randomUUID(),
