@@ -2,7 +2,8 @@
  * CertVoice — Stripe Subscription Worker
  *
  * Cloudflare Worker handling Stripe integration for CertVoice Pro.
- * Single plan: £29.99/month with 14-day free trial.
+ * Tiered pricing: Solo £29.99/mo, Team £24.99/seat/mo, Business £19.99/seat/mo.
+ * Solo tier fully functional at launch. Team/Business gated until Phase F.
  *
  * Endpoints:
  *   GET  /api/stripe/subscription    — Current subscription status
@@ -28,13 +29,17 @@ import { Redis } from '@upstash/redis/cloudflare'
 // TYPES
 // ============================================================
 
+type PlanTier = 'solo' | 'team' | 'business' | 'enterprise'
+
 interface Env {
   DATABASE_URL: string
   ALLOWED_ORIGIN: string
   CLERK_JWKS_URL: string
   STRIPE_SECRET_KEY: string
   STRIPE_WEBHOOK_SECRET: string
-  STRIPE_PRICE_ID: string
+  STRIPE_PRICE_ID_SOLO: string
+  STRIPE_PRICE_ID_TEAM: string
+  STRIPE_PRICE_ID_BUSINESS: string
   UPSTASH_REDIS_REST_URL: string
   UPSTASH_REDIS_REST_TOKEN: string
   READ_ONLY_MODE?: string
@@ -48,6 +53,7 @@ interface ClerkJWTPayload {
 
 interface SubscriptionResponse {
   status: string
+  planTier: PlanTier
   planName: string
   currentPeriodEnd: string | null
   trialEnd: string | null
@@ -66,6 +72,37 @@ interface StructuredLog {
   message?: string
   error?: string
 }
+
+// ============================================================
+// PLAN TIER MAPPING
+// ============================================================
+
+interface PlanInfo {
+  tier: PlanTier
+  name: string
+  amount: number // pence
+}
+
+function getPlanByPriceId(priceId: string, env: Env): PlanInfo | null {
+  const map: Record<string, PlanInfo> = {
+    [env.STRIPE_PRICE_ID_SOLO]: { tier: 'solo', name: 'CertVoice Solo', amount: 2999 },
+    [env.STRIPE_PRICE_ID_TEAM]: { tier: 'team', name: 'CertVoice Team', amount: 2499 },
+    [env.STRIPE_PRICE_ID_BUSINESS]: { tier: 'business', name: 'CertVoice Business', amount: 1999 },
+  }
+  return map[priceId] ?? null
+}
+
+function getPlanByTier(tier: PlanTier, env: Env): { priceId: string; info: PlanInfo } | null {
+  const map: Record<string, { priceId: string; info: PlanInfo }> = {
+    solo: { priceId: env.STRIPE_PRICE_ID_SOLO, info: { tier: 'solo', name: 'CertVoice Solo', amount: 2999 } },
+    team: { priceId: env.STRIPE_PRICE_ID_TEAM, info: { tier: 'team', name: 'CertVoice Team', amount: 2499 } },
+    business: { priceId: env.STRIPE_PRICE_ID_BUSINESS, info: { tier: 'business', name: 'CertVoice Business', amount: 1999 } },
+  }
+  return map[tier] ?? null
+}
+
+// Tiers gated until Phase F multi-seat implementation
+const GATED_TIERS: PlanTier[] = ['team', 'business']
 
 // ============================================================
 // GUARD HELPERS
@@ -296,6 +333,7 @@ async function verifyStripeSignature(
 /**
  * GET /api/stripe/subscription
  * Returns current subscription status for the authenticated engineer.
+ * Now includes plan_tier and tier-specific amount.
  */
 async function handleGetSubscription(
   clerkUserId: string,
@@ -307,7 +345,7 @@ async function handleGetSubscription(
 
   const rows = await sql`
     SELECT subscription_status, subscription_plan, stripe_customer_id,
-           trial_ends_at, current_period_end
+           trial_ends_at, current_period_end, plan_tier
     FROM engineers
     WHERE clerk_user_id = ${clerkUserId}
     LIMIT 1
@@ -319,6 +357,12 @@ async function handleGetSubscription(
 
   const row = rows[0]
   const status = (row.subscription_status as string) ?? 'none'
+  const planTier = (row.plan_tier as PlanTier) ?? 'solo'
+
+  // Resolve tier-specific display info
+  const planData = getPlanByTier(planTier, env)
+  const planName = planData?.info.name ?? 'CertVoice Solo'
+  const amount = planData?.info.amount ?? 2999
 
   // If active/trialing, fetch live status from Stripe for accuracy
   if (row.stripe_customer_id && (status === 'active' || status === 'trialing')) {
@@ -333,7 +377,8 @@ async function handleGetSubscription(
       if (subData) {
         const response: SubscriptionResponse = {
           status: subData.status as string,
-          planName: 'CertVoice Pro',
+          planTier,
+          planName,
           currentPeriodEnd: subData.current_period_end
             ? new Date((subData.current_period_end as number) * 1000).toISOString()
             : null,
@@ -341,7 +386,7 @@ async function handleGetSubscription(
             ? new Date((subData.trial_end as number) * 1000).toISOString()
             : null,
           cancelAtPeriodEnd: (subData.cancel_at_period_end as boolean) ?? false,
-          amount: 2999,
+          amount,
           currency: 'gbp',
         }
         return json({ ...response, requestId }, 200, cors)
@@ -353,7 +398,8 @@ async function handleGetSubscription(
 
   const response: SubscriptionResponse = {
     status,
-    planName: 'CertVoice Pro',
+    planTier,
+    planName,
     currentPeriodEnd: row.current_period_end
       ? new Date(row.current_period_end as string).toISOString()
       : null,
@@ -361,7 +407,7 @@ async function handleGetSubscription(
       ? new Date(row.trial_ends_at as string).toISOString()
       : null,
     cancelAtPeriodEnd: false,
-    amount: 2999,
+    amount,
     currency: 'gbp',
   }
 
@@ -371,6 +417,8 @@ async function handleGetSubscription(
 /**
  * POST /api/stripe/checkout
  * Creates a Stripe Checkout Session with 14-day trial.
+ * Accepts { tier, successUrl, cancelUrl } — defaults to 'solo'.
+ * Team/Business tiers gated until Phase F.
  * Returns { url } for frontend redirect.
  */
 async function handleCheckout(
@@ -380,7 +428,29 @@ async function handleCheckout(
   cors: Record<string, string>,
   requestId: string
 ): Promise<Response> {
-  const body = (await request.json()) as { successUrl: string; cancelUrl: string }
+  const body = (await request.json()) as {
+    tier?: PlanTier
+    successUrl: string
+    cancelUrl: string
+  }
+
+  const tier: PlanTier = body.tier ?? 'solo'
+
+  // Validate tier
+  const planData = getPlanByTier(tier, env)
+  if (!planData) {
+    return json({ error: 'Invalid plan tier', requestId }, 400, cors)
+  }
+
+  // Gate team/business until Phase F
+  if (GATED_TIERS.includes(tier)) {
+    return json({
+      error: 'Multi-seat plans coming soon. Solo plan available now.',
+      code: 'TIER_NOT_AVAILABLE',
+      requestId,
+    }, 400, cors)
+  }
+
   const sql = neon(env.DATABASE_URL)
 
   // Get or create Stripe customer
@@ -425,10 +495,11 @@ async function handleCheckout(
     {
       'customer': customerId,
       'mode': 'subscription',
-      'line_items[0][price]': env.STRIPE_PRICE_ID,
+      'line_items[0][price]': planData.priceId,
       'line_items[0][quantity]': '1',
       'subscription_data[trial_period_days]': '14',
       'subscription_data[metadata][clerk_user_id]': clerkUserId,
+      'subscription_data[metadata][plan_tier]': tier,
       'success_url': body.successUrl,
       'cancel_url': body.cancelUrl,
       'allow_promotion_codes': 'true',
@@ -490,6 +561,7 @@ async function handleBillingPortal(
  * Handles Stripe webhook events to keep Neon in sync.
  * No Clerk auth — uses Stripe signature verification.
  * Idempotent — duplicate event IDs are skipped via Upstash Redis.
+ * Now extracts plan_tier from subscription metadata.
  */
 async function handleWebhook(
   request: Request,
@@ -542,11 +614,27 @@ async function handleWebhook(
         ? new Date((obj.current_period_end as number) * 1000).toISOString()
         : null
 
+      // Extract plan_tier from subscription metadata (set during checkout)
+      const metadata = (obj.metadata ?? {}) as Record<string, string>
+      const planTier = metadata.plan_tier ?? 'solo'
+
+      // Also resolve tier from price ID as fallback
+      const items = obj.items as { data?: Array<{ price?: { id?: string } }> } | undefined
+      const priceId = items?.data?.[0]?.price?.id
+      let resolvedTier = planTier
+      if (priceId) {
+        const planInfo = getPlanByPriceId(priceId, env)
+        if (planInfo) {
+          resolvedTier = planInfo.tier
+        }
+      }
+
       await sql`
         UPDATE engineers
         SET subscription_status = ${status},
             trial_ends_at = ${trialEnd},
-            current_period_end = ${periodEnd}
+            current_period_end = ${periodEnd},
+            plan_tier = ${resolvedTier}
         WHERE stripe_customer_id = ${customerId}
       `
       break
