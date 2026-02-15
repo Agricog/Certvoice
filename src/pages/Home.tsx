@@ -291,7 +291,7 @@ export default function Home() {
             </p>
           </div>
           <Link
-            to="/inspection/new"
+            to="/new"
             className="cv-btn-primary flex items-center gap-2 px-4 py-2.5 text-sm"
           >
             <Plus className="w-4 h-4" />
@@ -329,7 +329,7 @@ export default function Home() {
 
         {/* ---- Voice Shortcut ---- */}
         <Link
-          to="/inspection/new"
+          to="/new"
           className="cv-panel flex items-center gap-4 p-4 border-certvoice-accent/30
                      hover:border-certvoice-accent transition-colors cursor-pointer"
         >
@@ -395,7 +395,7 @@ export default function Home() {
                   : 'No certificates yet'}
               </p>
               <Link
-                to="/inspection/new"
+                to="/new"
                 className="text-xs text-certvoice-accent hover:underline mt-2 inline-block"
               >
                 Start your first inspection
@@ -417,8 +417,8 @@ export default function Home() {
                   key={cert.id}
                   to={
                     status === 'DRAFT'
-                      ? '/inspection/new'
-                      : `/inspection/capture`
+                      ? '/new'
+                      : `/inspect/${cert.id}`
                   }
                   state={{ certificate: cert }}
                   className="cv-panel block p-4 hover:border-certvoice-accent/50 transition-colors"
