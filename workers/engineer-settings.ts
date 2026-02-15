@@ -11,6 +11,7 @@
  * Auth: Clerk JWT verified from Authorization header.
  * Storage: Signature PNG uploaded to R2, key stored in Neon.
  * Rate limit: 30 requests/hour per engineer via Upstash.
+ * Guard: requestId, structured logs, safety switches per Build Standard v3.
  *
  * Deploy: wrangler deploy (separate from Railway frontend)
  *
@@ -28,11 +29,11 @@ import { Redis } from '@upstash/redis/cloudflare'
 interface Env {
   DATABASE_URL: string
   ALLOWED_ORIGIN: string
-  CLERK_PUBLISHABLE_KEY: string
   CLERK_JWKS_URL: string
   UPSTASH_REDIS_REST_URL: string
   UPSTASH_REDIS_REST_TOKEN: string
   SIGNATURES_BUCKET: R2Bucket
+  READ_ONLY_MODE?: string
 }
 
 interface ClerkJWTPayload {
@@ -68,6 +69,35 @@ interface SettingsPayload {
   irTesterCalibrationDate: string
   continuityTesterSerial: string
   continuityTesterCalibrationDate: string
+}
+
+interface StructuredLog {
+  requestId: string
+  route: string
+  method: string
+  status: number
+  latencyMs: number
+  userId: string | null
+  message?: string
+  error?: string
+}
+
+// ============================================================
+// GUARD HELPERS
+// ============================================================
+
+function generateRequestId(): string {
+  const timestamp = Date.now().toString(36)
+  const random = crypto.randomUUID().slice(0, 8)
+  return `cv-eng-${timestamp}-${random}`
+}
+
+function structuredLog(log: StructuredLog): void {
+  console.log(JSON.stringify({
+    ...log,
+    service: 'certvoice-engineer-settings',
+    timestamp: new Date().toISOString(),
+  }))
 }
 
 // ============================================================
@@ -269,7 +299,8 @@ async function getSignatureDataUrl(
 async function handleGet(
   clerkUserId: string,
   env: Env,
-  headers: Record<string, string>
+  cors: Record<string, string>,
+  requestId: string
 ): Promise<Response> {
   const sql = neon(env.DATABASE_URL)
 
@@ -278,9 +309,9 @@ async function handleGet(
   `
 
   if (rows.length === 0) {
-    return new Response(JSON.stringify(null), {
+    return new Response(JSON.stringify({ data: null, requestId }), {
       status: 404,
-      headers: { 'Content-Type': 'application/json', ...headers },
+      headers: { 'Content-Type': 'application/json', ...cors },
     })
   }
 
@@ -295,9 +326,9 @@ async function handleGet(
     )
   }
 
-  return new Response(JSON.stringify(payload), {
+  return new Response(JSON.stringify({ ...payload, requestId }), {
     status: 200,
-    headers: { 'Content-Type': 'application/json', ...headers },
+    headers: { 'Content-Type': 'application/json', ...cors },
   })
 }
 
@@ -305,7 +336,8 @@ async function handlePut(
   clerkUserId: string,
   request: Request,
   env: Env,
-  headers: Record<string, string>
+  cors: Record<string, string>,
+  requestId: string
 ): Promise<Response> {
   const body = (await request.json()) as SettingsPayload
   const sql = neon(env.DATABASE_URL)
@@ -313,8 +345,8 @@ async function handlePut(
   // Validate required fields
   if (!body.fullName || body.fullName.trim().length === 0) {
     return new Response(
-      JSON.stringify({ error: 'Full name is required' }),
-      { status: 400, headers: { 'Content-Type': 'application/json', ...headers } }
+      JSON.stringify({ error: 'Full name is required', requestId }),
+      { status: 400, headers: { 'Content-Type': 'application/json', ...cors } }
     )
   }
 
@@ -323,10 +355,10 @@ async function handlePut(
   if (body.signatureDataUrl) {
     try {
       signatureR2Key = await uploadSignature(env.SIGNATURES_BUCKET, clerkUserId, body.signatureDataUrl)
-    } catch (error) {
+    } catch {
       return new Response(
-        JSON.stringify({ error: 'Failed to upload signature' }),
-        { status: 400, headers: { 'Content-Type': 'application/json', ...headers } }
+        JSON.stringify({ error: 'Failed to upload signature', requestId }),
+        { status: 400, headers: { 'Content-Type': 'application/json', ...cors } }
       )
     }
   }
@@ -414,8 +446,8 @@ async function handlePut(
   const engineerId = rows[0]?.id as string
 
   return new Response(
-    JSON.stringify({ success: true, engineerId }),
-    { status: 200, headers: { 'Content-Type': 'application/json', ...headers } }
+    JSON.stringify({ success: true, engineerId, requestId }),
+    { status: 200, headers: { 'Content-Type': 'application/json', ...cors } }
   )
 }
 
@@ -425,9 +457,13 @@ async function handlePut(
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const startTime = Date.now()
+    const requestId = generateRequestId()
     const url = new URL(request.url)
     const origin = request.headers.get('Origin') ?? ''
     const cors = corsHeaders(origin, env.ALLOWED_ORIGIN)
+    let userId: string | null = null
+    let status = 200
 
     // CORS preflight
     if (request.method === 'OPTIONS') {
@@ -436,29 +472,61 @@ export default {
 
     // Only handle /api/engineer/settings
     if (url.pathname !== '/api/engineer/settings') {
-      return new Response(JSON.stringify({ error: 'Not found' }), {
-        status: 404,
+      status = 404
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId: null,
+        message: 'Route not found',
+      })
+      return new Response(JSON.stringify({ error: 'Not found', requestId }), {
+        status,
         headers: { 'Content-Type': 'application/json', ...cors },
       })
     }
 
     // Only GET and PUT
     if (request.method !== 'GET' && request.method !== 'PUT') {
-      return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-        status: 405,
+      status = 405
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId: null,
+        message: 'Method not allowed',
+      })
+      return new Response(JSON.stringify({ error: 'Method not allowed', requestId }), {
+        status,
         headers: { 'Content-Type': 'application/json', ...cors },
       })
     }
 
+    // READ_ONLY_MODE safety switch (blocks PUT, allows GET)
+    if (env.READ_ONLY_MODE === 'true' && request.method === 'PUT') {
+      status = 503
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId: null,
+        message: 'Read-only mode active — write operation blocked',
+      })
+      return new Response(
+        JSON.stringify({ success: false, error: 'Service temporarily in read-only mode', code: 'READ_ONLY', requestId }),
+        { status, headers: { 'Content-Type': 'application/json', ...cors } }
+      )
+    }
+
     // Authenticate via Clerk JWT
-    const clerkUserId = await verifyClerkJWT(
+    userId = await verifyClerkJWT(
       request.headers.get('Authorization'),
       env.CLERK_JWKS_URL
     )
 
-    if (!clerkUserId) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
+    if (!userId) {
+      status = 401
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId: null,
+        message: 'JWT verification failed',
+      })
+      return new Response(JSON.stringify({ error: 'Unauthorized', requestId }), {
+        status,
         headers: { 'Content-Type': 'application/json', ...cors },
       })
     }
@@ -466,11 +534,17 @@ export default {
     // Rate limit
     try {
       const limiter = createRateLimiter(env)
-      const { success } = await limiter.limit(clerkUserId)
+      const { success } = await limiter.limit(userId)
       if (!success) {
+        status = 429
+        structuredLog({
+          requestId, route: url.pathname, method: request.method,
+          status, latencyMs: Date.now() - startTime, userId,
+          message: 'Rate limited',
+        })
         return new Response(
-          JSON.stringify({ error: 'Too many requests. Try again later.' }),
-          { status: 429, headers: { 'Content-Type': 'application/json', ...cors } }
+          JSON.stringify({ error: 'Too many requests. Try again later.', code: 'RATE_LIMITED', requestId }),
+          { status, headers: { 'Content-Type': 'application/json', ...cors } }
         )
       }
     } catch {
@@ -479,15 +553,34 @@ export default {
 
     // Route
     try {
+      let response: Response
       if (request.method === 'GET') {
-        return await handleGet(clerkUserId, env, cors)
+        response = await handleGet(userId, env, cors, requestId)
+      } else {
+        response = await handlePut(userId, request, env, cors, requestId)
       }
-      return await handlePut(clerkUserId, request, env, cors)
+
+      status = response.status
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId,
+        message: request.method === 'GET'
+          ? (status === 200 ? 'Settings loaded' : 'Settings not found')
+          : (status === 200 ? 'Settings saved' : 'Settings save failed'),
+      })
+
+      return response
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Internal server error'
+      status = 500
+      structuredLog({
+        requestId, route: url.pathname, method: request.method,
+        status, latencyMs: Date.now() - startTime, userId,
+        error: message,
+      })
       return new Response(
-        JSON.stringify({ error: message }),
-        { status: 500, headers: { 'Content-Type': 'application/json', ...cors } }
+        JSON.stringify({ error: 'Internal server error', requestId }),
+        { status, headers: { 'Content-Type': 'application/json', ...cors } }
       )
     }
   },
