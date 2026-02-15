@@ -71,7 +71,6 @@ export function useOffline(): OfflineStatus {
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true)
-      // Auto-trigger sync when connectivity returns
       triggerSyncInternal()
     }
 
@@ -102,34 +101,20 @@ export function useOffline(): OfflineStatus {
         setIsSyncing(false)
         syncingRef.current = false
         setLastSyncAt(Date.now())
-        // Refresh count after sync
         requestPendingCount()
       }
     }
 
-    try {
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.ready
-          .then((registration) => {
-            const reg = registration as ServiceWorkerRegistration & {
-              sync?: { register: (tag: string) => Promise<void> }
-            }
-            if (reg.sync) {
-              return reg.sync.register('sync-offline-requests')
-            }
-            fallbackManualSync()
-            return
-          })
-          .catch(() => {
-            fallbackManualSync()
-          })
-      } else {
-        fallbackManualSync()
-      }
-    } catch {
-      syncingRef.current = false
-      setIsSyncing(false)
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleMessage)
     }
+
+    return () => {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleMessage)
+      }
+    }
+  }, [])
 
   // ---- Initial pending count ----
   useEffect(() => {
@@ -144,7 +129,6 @@ export function useOffline(): OfflineStatus {
           type: 'GET_PENDING_COUNT',
         })
       } else {
-        // Fallback: read from IndexedDB directly
         getPendingCountDirect().then(setPendingSync).catch(() => setPendingSync(0))
       }
     } catch {
@@ -161,13 +145,19 @@ export function useOffline(): OfflineStatus {
     setIsSyncing(true)
 
     try {
-      if ('serviceWorker' in navigator && 'sync' in ServiceWorkerRegistration.prototype) {
+      if ('serviceWorker' in navigator) {
         navigator.serviceWorker.ready
           .then((registration) => {
-            return registration.sync.register('sync-offline-requests')
+            const reg = registration as ServiceWorkerRegistration & {
+              sync?: { register: (tag: string) => Promise<void> }
+            }
+            if (reg.sync) {
+              return reg.sync.register('sync-offline-requests')
+            }
+            fallbackManualSync()
+            return
           })
           .catch(() => {
-            // Background Sync not supported — tell SW to sync manually
             fallbackManualSync()
           })
       } else {
@@ -222,7 +212,6 @@ export function useOffline(): OfflineStatus {
 
         setPendingSync((prev) => prev + 1)
 
-        // If online, trigger sync immediately
         if (navigator.onLine) {
           triggerSyncInternal()
         }
