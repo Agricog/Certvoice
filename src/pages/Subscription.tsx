@@ -64,9 +64,10 @@ interface SubscriptionInfo {
 // ============================================================
 
 const STRIPE_PUBLIC_KEY = import.meta.env.VITE_STRIPE_PUBLIC_KEY ?? ''
-const CHECKOUT_API = '/api/stripe/checkout'
-const BILLING_API = '/api/stripe/billing-portal'
-const SUBSCRIPTION_API = '/api/stripe/subscription'
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
+const CHECKOUT_API = `${API_BASE}/api/stripe/checkout`
+const BILLING_API = `${API_BASE}/api/stripe/billing-portal`
+const SUBSCRIPTION_API = `${API_BASE}/api/stripe/subscription`
 
 const PLAN_FEATURES = [
   { icon: Mic, text: 'Unlimited voice capture' },
