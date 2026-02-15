@@ -73,13 +73,11 @@ binding = "SIGNATURES_BUCKET"
 bucket_name = "certvoice-storage"
 
 # --- 5. Stripe Subscription ---
-[env.stripe-subscription]
-name = "certvoice-stripe-subscription"
-main = "workers/stripe-subscription.ts"
-
 [env.stripe-subscription.vars]
 ALLOWED_ORIGIN = "https://certvoice.co.uk"
-STRIPE_PRICE_ID = ""
+STRIPE_PRICE_ID_SOLO = "price_1T1B0WRQz2FQGkPSD6Y2Mwpa"
+STRIPE_PRICE_ID_TEAM = "price_1T1B14RQz2FQGkPSoqzD9Khn"
+STRIPE_PRICE_ID_BUSINESS = "price_1T1B1pRQz2FQGkPSiHxWlmuS"
 
 # --- 6. Certificates CRUD ---
 [env.certificates-crud]
