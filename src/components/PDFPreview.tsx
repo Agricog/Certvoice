@@ -70,8 +70,8 @@ function trackPdfEvent(
   data: Record<string, string | number | boolean> = {}
 ): void {
   try {
-    if (typeof window !== 'undefined' && (window as Record<string, unknown>).gtag) {
-      const gtag = (window as Record<string, unknown>).gtag as (
+    if (typeof window !== 'undefined' && (window as unknown as Record<string, unknown>).gtag) {
+      const gtag = (window as unknown as Record<string, unknown>).gtag as (
         command: string,
         action: string,
         params: Record<string, string | number | boolean>
