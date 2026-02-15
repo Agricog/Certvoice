@@ -174,6 +174,7 @@ export default function InspectionCapture() {
             existing[editingCircuitIndex] = { ...existing[editingCircuitIndex], ...circuit }
           } else {
             existing.push({
+              id: crypto.randomUUID(),
               ...circuit,
               dbId: activeBoard?.dbReference ?? 'DB1',
             } as CircuitDetail)
@@ -203,6 +204,7 @@ export default function InspectionCapture() {
             existing[editingObsIndex] = { ...existing[editingObsIndex], ...observation }
           } else {
             existing.push({
+              id: crypto.randomUUID(),
               ...observation,
               itemNumber: existing.length + 1,
               dbReference: activeBoard?.dbReference ?? 'DB1',
@@ -254,7 +256,7 @@ export default function InspectionCapture() {
           const items = [...(prev.inspectionSchedule ?? [])]
           const idx = items.findIndex((i) => i.id === itemId)
           if (idx >= 0) {
-            items[idx] = { ...items[idx], outcome, notes }
+            items[idx] = { ...items[idx], outcome, notes } as InspectionItem
           }
           const completed = items.filter((i) => i.outcome !== null).length
           trackChecklistProgress(completed, items.length)
