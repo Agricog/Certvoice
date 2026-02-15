@@ -14,7 +14,7 @@ interface AuthPageProps {
 
 export default function AuthPage({ mode }: AuthPageProps) {
   const location = useLocation()
-  const returnTo = (location.state as { returnTo?: string })?.returnTo || '/'
+  const returnTo = (location.state as { returnTo?: string })?.returnTo || '/dashboard'
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-certvoice-bg px-4 py-8">
