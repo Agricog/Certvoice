@@ -100,7 +100,7 @@ export default function NewInspection() {
   // --- Section B: Reason for Report ---
   const [reportReason, setReportReason] = useState<ReportReason>({
     purpose: 'PERIODIC',
-    inspectionDates: [new Date().toISOString().split('T')[0]],
+    inspectionDates: [new Date().toISOString().split('T')[0] ?? ''],
   })
 
   // --- Section C: Installation Details ---
