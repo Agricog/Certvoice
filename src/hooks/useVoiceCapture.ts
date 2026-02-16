@@ -189,6 +189,12 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
     recognition.continuous = true
     recognition.interimResults = true
     recognition.lang = 'en-GB'
+    // Safari: disable continuous mode (causes UI freeze)
+const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent)
+if (isSafari) {
+  recognition.continuous = false
+  recognition.interimResults = false
+}
     recognition.maxAlternatives = 1
 
     recognition.onstart = () => {
