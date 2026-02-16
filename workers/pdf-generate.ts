@@ -269,7 +269,7 @@ interface Env {
   CLERK_JWKS_URL: string
   UPSTASH_REDIS_REST_URL: string
   UPSTASH_REDIS_REST_TOKEN: string
-  CERTVOICE_BUCKET: R2Bucket
+  STORAGE_BUCKET: R2Bucket
   READ_ONLY_MODE?: string
 }
 
@@ -1637,7 +1637,7 @@ export default {
       if (outputFormat === 'r2') {
         // Upload to R2
         const pdfKey = `certificates/${body.certificate.id}/${body.certificate.reportNumber}.pdf`
-        await env.CERTVOICE_BUCKET.put(pdfKey, pdfBytes, {
+        await env.STORAGE_BUCKET.put(pdfKey, pdfBytes, {
           httpMetadata: { contentType: 'application/pdf' },
           customMetadata: {
             reportNumber: body.certificate.reportNumber,
