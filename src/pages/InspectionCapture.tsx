@@ -191,7 +191,6 @@ export default function InspectionCapture() {
               clientName: stateCert.clientDetails?.clientName ?? undefined,
               clientAddress: stateCert.clientDetails?.clientAddress ?? undefined,
               installationAddress: stateCert.installationDetails?.installationAddress ?? undefined,
-              installationPostcode: stateCert.installationDetails?.installationPostcode ?? undefined,
               purpose: stateCert.reportReason?.purpose ?? undefined,
               premisesType: stateCert.installationDetails?.premisesType ?? undefined,
               extentOfInspection: stateCert.extentAndLimitations?.extentCovered ?? undefined,
