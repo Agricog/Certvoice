@@ -5,6 +5,10 @@
  * Calls pdf-generate Cloudflare Worker, renders preview in iframe, provides
  * download / email / share actions.
  *
+ * Photo evidence toggle: defaults ON when observations have photos,
+ * engineer can toggle off for lighter PDFs (useful on poor signal).
+ * Regenerate button makes the flow explicit after toggling.
+ *
  * Placement: Modal overlay triggered from CertificateReview page.
  * Actions: Download PDF, Email to Client (Resend), Share (Web Share API)
  *
@@ -28,6 +32,7 @@ import {
   ShieldCheck,
   Send,
   WifiOff,
+  Image,
 } from 'lucide-react'
 import type { EICRCertificate, ClassificationCode } from '../types/eicr'
 import { validateInput } from '../utils/validation'
@@ -99,8 +104,15 @@ export default function PDFPreview({
 }: PDFPreviewProps) {
   const { getToken } = useAuth()
 
+  // --- Photo evidence: detect if any observations have photos ---
+  const hasPhotos = (certificate.observations ?? []).some(
+    (o) => (o.photoKeys?.length ?? 0) > 0
+  )
+
   // --- State ---
   const [generationState, setGenerationState] = useState<GenerationState>('idle')
+  const [includePhotos, setIncludePhotos] = useState(hasPhotos)
+  const [photosStale, setPhotosStale] = useState(false)
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
   const [pageCount, setPageCount] = useState<number | null>(null)
   const [generationTime, setGenerationTime] = useState<number | null>(null)
@@ -120,6 +132,9 @@ export default function PDFPreview({
   const blobUrlRef = useRef<string | null>(null)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+
+  /** Track which includePhotos value was used for the current PDF */
+  const generatedWithPhotosRef = useRef<boolean>(hasPhotos)
 
   // --- Derived ---
   const assessment = certificate.summaryOfCondition?.overallAssessment ?? 'UNSATISFACTORY'
@@ -144,6 +159,11 @@ export default function PDFPreview({
     {} as Record<string, number>
   )
 
+  const photoCount = (certificate.observations ?? []).reduce(
+    (sum, o) => sum + (o.photoKeys?.length ?? 0),
+    0
+  )
+
   const filename = `EICR-${reportNumber}-${address
     .replace(/[^a-zA-Z0-9]/g, '-')
     .replace(/-+/g, '-')
@@ -165,6 +185,19 @@ export default function PDFPreview({
     generatePdf()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // --- Mark PDF as stale when photo toggle changes after generation ---
+  const handlePhotosToggle = useCallback(
+    (checked: boolean) => {
+      setIncludePhotos(checked)
+      if (generationState === 'ready' && checked !== generatedWithPhotosRef.current) {
+        setPhotosStale(true)
+      } else {
+        setPhotosStale(false)
+      }
+    },
+    [generationState]
+  )
 
   // ============================================================
   // PDF GENERATION
@@ -188,6 +221,7 @@ export default function PDFPreview({
     setErrorMessage('')
     setPageCount(null)
     setGenerationTime(null)
+    setPhotosStale(false)
 
     const startTime = performance.now()
     abortControllerRef.current = new AbortController()
@@ -203,7 +237,7 @@ export default function PDFPreview({
         body: JSON.stringify({
           certificate,
           options: {
-            includePhotos: false,
+            includePhotos,
             companyLogo: null,
             outputFormat: 'buffer',
           },
@@ -227,6 +261,9 @@ export default function PDFPreview({
       blobUrlRef.current = url
       setBlobUrl(url)
 
+      // Track which photo setting was used for this generation
+      generatedWithPhotosRef.current = includePhotos
+
       // Estimate page count from file size (rough: ~15KB per page for text-heavy PDFs)
       const estimatedPages = Math.max(1, Math.round(blob.size / 15000))
       setPageCount(estimatedPages)
@@ -242,6 +279,8 @@ export default function PDFPreview({
         generation_time_ms: elapsed,
         file_size_bytes: blob.size,
         assessment,
+        include_photos: includePhotos,
+        photo_count: photoCount,
       })
     } catch (error) {
       if ((error as Error).name === 'AbortError') return
@@ -257,7 +296,7 @@ export default function PDFPreview({
         error: error instanceof Error ? error.message : 'unknown',
       })
     }
-  }, [certificate, reportNumber, assessment, getToken])
+  }, [certificate, reportNumber, assessment, getToken, includePhotos, photoCount])
 
   // ============================================================
   // DOWNLOAD
@@ -275,7 +314,10 @@ export default function PDFPreview({
       link.click()
       document.body.removeChild(link)
 
-      trackPdfEvent('pdf_downloaded', { report_number: reportNumber })
+      trackPdfEvent('pdf_downloaded', {
+        report_number: reportNumber,
+        include_photos: generatedWithPhotosRef.current,
+      })
     } catch (error) {
       captureError(error, 'PDFPreview.handleDownload')
     }
@@ -415,6 +457,11 @@ export default function PDFPreview({
       <p className="text-xs text-certvoice-muted max-w-xs">
         Building BS 7671:2018+A2:2022 compliant EICR for{' '}
         <span className="text-certvoice-text font-medium">{address}</span>
+        {includePhotos && photoCount > 0 && (
+          <span className="block mt-1 text-certvoice-accent">
+            Including {photoCount} photo{photoCount !== 1 ? 's' : ''} — this may take longer
+          </span>
+        )}
       </p>
       <div className="mt-6 w-48 h-1.5 bg-certvoice-surface-2 rounded-full overflow-hidden">
         <div className="h-full bg-certvoice-accent rounded-full animate-pulse" style={{ width: '60%' }} />
@@ -573,6 +620,9 @@ export default function PDFPreview({
             <div className="text-[10px] text-certvoice-muted bg-certvoice-surface-2 rounded-lg p-3">
               The certificate will be sent as a PDF attachment with a standard covering message
               including the report number ({reportNumber}) and property address.
+              {generatedWithPhotosRef.current && (
+                <span className="block mt-1">Photo evidence is included in this PDF.</span>
+              )}
             </div>
 
             {emailState.error && (
@@ -707,7 +757,7 @@ export default function PDFPreview({
 
                   {/* Observation summary */}
                   {Object.keys(observationCounts).length > 0 && (
-                    <div className="ml-auto flex items-center gap-2">
+                    <div className="flex items-center gap-2">
                       {(Object.entries(observationCounts) as Array<[string, number]>).map(([code, count]) => (
                         <span
                           key={code}
@@ -725,6 +775,29 @@ export default function PDFPreview({
                         </span>
                       ))}
                     </div>
+                  )}
+
+                  {/* Photo evidence toggle — only shown when observations have photos */}
+                  {hasPhotos && (
+                    <label className="ml-auto flex items-center gap-1.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={includePhotos}
+                        onChange={(e) => handlePhotosToggle(e.target.checked)}
+                        className="w-3 h-3 rounded border-certvoice-border text-certvoice-accent
+                                   focus:ring-certvoice-accent/40 cursor-pointer"
+                        aria-label="Include photo evidence in PDF"
+                      />
+                      <Image className="w-3 h-3" />
+                      <span className="text-certvoice-text font-medium">
+                        Photos ({photoCount})
+                      </span>
+                      {photosStale && (
+                        <span className="text-certvoice-amber font-semibold ml-1">
+                          — regenerate to apply
+                        </span>
+                      )}
+                    </label>
                   )}
                 </div>
               </div>
@@ -759,6 +832,22 @@ export default function PDFPreview({
               >
                 <ArrowLeft className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Edit</span>
+              </button>
+
+              {/* Regenerate — always available, highlighted when photo toggle changed */}
+              <button
+                type="button"
+                onClick={generatePdf}
+                className={`px-3 py-2 rounded-lg border text-xs font-semibold
+                           transition-colors flex items-center gap-2 ${
+                  photosStale
+                    ? 'border-certvoice-accent text-certvoice-accent hover:bg-certvoice-accent/10'
+                    : 'border-certvoice-border text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent'
+                }`}
+                aria-label="Regenerate PDF"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Regenerate</span>
               </button>
 
               <div className="flex-1" />
