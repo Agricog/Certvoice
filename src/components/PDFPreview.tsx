@@ -13,6 +13,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Helmet } from 'react-helmet-async'
+import { useAuth } from '@clerk/clerk-react'
 import {
   X,
   Download,
@@ -58,8 +59,9 @@ interface EmailState {
 // CONSTANTS
 // ============================================================
 
-const PDF_WORKER_URL = import.meta.env.VITE_PDF_WORKER_URL ?? '/api/pdf/generate'
-const EMAIL_API_URL = '/api/email/certificate'
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
+const PDF_WORKER_URL = `${API_BASE}/api/pdf/generate`
+const EMAIL_API_URL = `${API_BASE}/api/email/certificate`
 
 // ============================================================
 // ANALYTICS HELPERS
@@ -95,6 +97,8 @@ export default function PDFPreview({
   onClose,
   onBackToReview,
 }: PDFPreviewProps) {
+  const { getToken } = useAuth()
+
   // --- State ---
   const [generationState, setGenerationState] = useState<GenerationState>('idle')
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
@@ -189,11 +193,12 @@ export default function PDFPreview({
     abortControllerRef.current = new AbortController()
 
     try {
+      const token = await getToken()
       const response = await fetch(PDF_WORKER_URL, {
         method: 'POST',
-        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           certificate,
@@ -252,7 +257,7 @@ export default function PDFPreview({
         error: error instanceof Error ? error.message : 'unknown',
       })
     }
-  }, [certificate, reportNumber, assessment])
+  }, [certificate, reportNumber, assessment, getToken])
 
   // ============================================================
   // DOWNLOAD
@@ -322,10 +327,13 @@ export default function PDFPreview({
 
       const sanitisedName = sanitizeText(clientName) ?? clientName
 
+      const token = await getToken()
       const emailResponse = await fetch(EMAIL_API_URL, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           to: email,
           clientName: sanitisedName,
@@ -352,7 +360,7 @@ export default function PDFPreview({
         error: 'Failed to send email. Please try again.',
       }))
     }
-  }, [emailState, blobUrl, reportNumber, address, assessment, filename])
+  }, [emailState, blobUrl, reportNumber, address, assessment, filename, getToken])
 
   // ============================================================
   // SHARE (Web Share API)
