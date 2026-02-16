@@ -46,7 +46,7 @@
       "src": "/icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
       "src": "/icons/icon-384.png",
@@ -58,42 +58,7 @@
       "src": "/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icons/icon-maskable-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/icons/icon-maskable-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
-    }
-  ],
-  "screenshots": [
-    {
-      "src": "/screenshots/dashboard.png",
-      "sizes": "1280x720",
-      "type": "image/png",
-      "label": "CertVoice Dashboard — Active certificates and recent inspections",
-      "form_factor": "wide"
-    },
-    {
-      "src": "/screenshots/voice-capture.png",
-      "sizes": "390x844",
-      "type": "image/png",
-      "label": "Voice Capture — Speak circuit details, AI extracts the data",
-      "form_factor": "narrow"
-    },
-    {
-      "src": "/screenshots/pdf-preview.png",
-      "sizes": "390x844",
-      "type": "image/png",
-      "label": "PDF Preview — BS 7671 compliant certificate ready to send",
-      "form_factor": "narrow"
+      "purpose": "any maskable"
     }
   ],
   "permissions_policy": {
