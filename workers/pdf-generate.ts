@@ -496,6 +496,15 @@ Observations coded FI (Further Investigation) indicate that further investigatio
 It is recommended that this report be retained in a safe place and be shown to any person inspecting or undertaking work on the electrical installation in the future. If the property is vacated, this report should be passed to the new occupier.`
 
 // ============================================================
+// SIGNATURE DIMENSIONS (px in PDF coordinate space)
+// ============================================================
+
+const SIGNATURE_BOX = {
+  width: 150,
+  height: 30,
+} as const
+
+// ============================================================
 // HELPER: PDF Drawing Context
 // ============================================================
 
@@ -509,6 +518,7 @@ interface DrawContext {
   pageNumber: number
   totalPages: number
   reportNumber: string
+  env: Env
 }
 
 function createPage(ctx: DrawContext, landscape: boolean = false): PDFPage {
@@ -533,6 +543,85 @@ function getPageWidth(page: PDFPage): number {
 function ensureSpace(ctx: DrawContext, needed: number, landscape: boolean = false): void {
   if (ctx.y - needed < MARGIN.bottom) {
     createPage(ctx, landscape)
+  }
+}
+
+// ============================================================
+// HELPER: Fetch and embed signature PNG from R2
+// ============================================================
+
+/**
+ * Fetch a signature PNG from R2 by storage key and embed it into the PDF.
+ * Draws the image at the specified position, scaled to fit the box.
+ * Falls back to a grey placeholder box if the fetch or embed fails.
+ *
+ * @returns true if signature was embedded, false if placeholder was drawn
+ */
+async function embedSignature(
+  ctx: DrawContext,
+  signatureKey: string | null,
+  x: number,
+  y: number,
+  boxWidth: number,
+  boxHeight: number
+): Promise<boolean> {
+  // No key — draw placeholder
+  if (!signatureKey) {
+    drawRect(ctx.currentPage, x, y, boxWidth, boxHeight, COLOURS.rowAlt, COLOURS.lightGrey)
+    return false
+  }
+
+  try {
+    // Fetch PNG bytes from R2 via the STORAGE_BUCKET binding
+    const object = await ctx.env.STORAGE_BUCKET.get(signatureKey)
+    if (!object) {
+      drawRect(ctx.currentPage, x, y, boxWidth, boxHeight, COLOURS.rowAlt, COLOURS.lightGrey)
+      return false
+    }
+
+    const bytes = new Uint8Array(await object.arrayBuffer())
+
+    // Determine image type from content-type or key extension
+    const contentType = object.httpMetadata?.contentType ?? ''
+    const isPng = contentType.includes('png') || signatureKey.endsWith('.png')
+    const isJpeg = contentType.includes('jpeg') || contentType.includes('jpg') ||
+                   signatureKey.endsWith('.jpg') || signatureKey.endsWith('.jpeg')
+
+    // Embed into PDF document
+    const image = isPng
+      ? await ctx.doc.embedPng(bytes)
+      : isJpeg
+        ? await ctx.doc.embedJpg(bytes)
+        : await ctx.doc.embedPng(bytes) // Default to PNG (SignatureCapture exports PNG)
+
+    // Scale image to fit within the box while preserving aspect ratio
+    const imgDims = image.scale(1)
+    const scaleX = boxWidth / imgDims.width
+    const scaleY = boxHeight / imgDims.height
+    const scale = Math.min(scaleX, scaleY)
+
+    const drawWidth = imgDims.width * scale
+    const drawHeight = imgDims.height * scale
+
+    // Centre the image within the box
+    const offsetX = x + (boxWidth - drawWidth) / 2
+    const offsetY = y + (boxHeight - drawHeight) / 2
+
+    // Draw a white background behind the signature for clean rendering
+    drawRect(ctx.currentPage, x, y, boxWidth, boxHeight, COLOURS.white, COLOURS.lightGrey)
+
+    ctx.currentPage.drawImage(image, {
+      x: offsetX,
+      y: offsetY,
+      width: drawWidth,
+      height: drawHeight,
+    })
+
+    return true
+  } catch {
+    // Any failure — fall back to placeholder
+    drawRect(ctx.currentPage, x, y, boxWidth, boxHeight, COLOURS.rowAlt, COLOURS.lightGrey)
+    return false
   }
 }
 
@@ -934,7 +1023,7 @@ function renderCoverPage(ctx: DrawContext, cert: EICRCertificate): void {
   }
 }
 
-function renderSummaryPage(ctx: DrawContext, cert: EICRCertificate): void {
+async function renderSummaryPage(ctx: DrawContext, cert: EICRCertificate): Promise<void> {
   createPage(ctx)
 
   // --- Section E ---
@@ -999,17 +1088,23 @@ function renderSummaryPage(ctx: DrawContext, cert: EICRCertificate): void {
     ])
     ctx.y -= 6
 
-    // Signature placeholders
+    // Inspector signature — fetch from R2 and embed, or draw placeholder
     drawText(ctx.currentPage, 'Inspector Signature:', MARGIN.left, ctx.y, ctx.fontBold, FONT_SIZE.label, COLOURS.midGrey)
-    drawRect(ctx.currentPage, MARGIN.left + 110, ctx.y - 4, 150, 30, COLOURS.rowAlt, COLOURS.lightGrey)
+    const inspSigX = MARGIN.left + 110
+    const inspSigY = ctx.y - 4
+    await embedSignature(ctx, d.inspectorSignatureKey, inspSigX, inspSigY, SIGNATURE_BOX.width, SIGNATURE_BOX.height)
     ctx.y -= 40
 
     drawFieldRow(ctx, [
       { label: 'Qualified Supervisor:', value: d.qsName, width: CONTENT_WIDTH / 2, labelWidth: 120 },
       { label: 'QS Date:', value: formatDate(d.qsDate), width: CONTENT_WIDTH / 2, labelWidth: 90 },
     ])
+
+    // QS signature — fetch from R2 and embed, or draw placeholder
     drawText(ctx.currentPage, 'QS Signature:', MARGIN.left, ctx.y, ctx.fontBold, FONT_SIZE.label, COLOURS.midGrey)
-    drawRect(ctx.currentPage, MARGIN.left + 110, ctx.y - 4, 150, 30, COLOURS.rowAlt, COLOURS.lightGrey)
+    const qsSigX = MARGIN.left + 110
+    const qsSigY = ctx.y - 4
+    await embedSignature(ctx, d.qsSignatureKey, qsSigX, qsSigY, SIGNATURE_BOX.width, SIGNATURE_BOX.height)
     ctx.y -= 40
   } else {
     drawText(ctx.currentPage, 'Declaration not yet completed.', MARGIN.left + 4, ctx.y, ctx.font, FONT_SIZE.body, COLOURS.midGrey)
@@ -1441,7 +1536,7 @@ function renderGuidancePage(ctx: DrawContext): void {
 // MAIN GENERATION FUNCTION
 // ============================================================
 
-async function generatePDF(cert: EICRCertificate): Promise<Uint8Array> {
+async function generatePDF(cert: EICRCertificate, env: Env): Promise<Uint8Array> {
   const doc = await PDFDocument.create()
 
   doc.setTitle(`EICR ${cert.reportNumber}`)
@@ -1465,11 +1560,12 @@ async function generatePDF(cert: EICRCertificate): Promise<Uint8Array> {
     pageNumber: 1,
     totalPages: 0,
     reportNumber: cert.reportNumber,
+    env,
   }
 
   // Render all sections
   renderCoverPage(ctx, cert)
-  renderSummaryPage(ctx, cert)
+  await renderSummaryPage(ctx, cert)
   renderSupplyPage(ctx, cert)
   renderObservationsPage(ctx, cert)
   renderInspectionSchedule(ctx, cert)
@@ -1631,7 +1727,7 @@ export default {
 
     // Generate PDF
     try {
-      const pdfBytes = await generatePDF(body.certificate)
+      const pdfBytes = await generatePDF(body.certificate, env)
       const outputFormat = body.options?.outputFormat ?? 'buffer'
 
       if (outputFormat === 'r2') {
