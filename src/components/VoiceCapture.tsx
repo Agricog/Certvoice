@@ -4,18 +4,22 @@
  * The primary voice capture interface:
  *   - Large mic button with recording/processing states
  *   - Visual waveform animation during recording
- *   - Live transcript display with interim results
+ *   - Live transcript display (real-time on Chrome, "Listening..." on iOS)
  *   - Error handling with clear user guidance
  *   - Duration timer
  *   - Unsupported browser fallback
+ *   - Capture method indicator (shows which engine is active)
+ *
+ * Automatically uses Web Speech API (Chrome/Edge) or MediaRecorder + Whisper
+ * (iOS/Safari/Firefox) via the unified useVoiceCapture hook.
  *
  * Used by CircuitRecorder, ObservationRecorder, and SupplyDetails.
  */
 
 import { useCallback, useEffect, useRef } from 'react'
-import { Mic, MicOff, AlertCircle, Loader2 } from 'lucide-react'
+import { Mic, MicOff, AlertCircle, Loader2, Wifi } from 'lucide-react'
 import { useVoiceCapture } from '../hooks/useVoiceCapture'
-import type { VoiceCaptureStatus } from '../hooks/useVoiceCapture'
+import type { VoiceCaptureStatus, CaptureMethod } from '../hooks/useVoiceCapture'
 import { trackVoiceStart, trackVoiceComplete, trackVoiceError } from '../utils/analytics'
 
 // ============================================================
@@ -44,7 +48,7 @@ interface StatusConfig {
   sublabel: string
 }
 
-function getStatusConfig(status: VoiceCaptureStatus): StatusConfig {
+function getStatusConfig(status: VoiceCaptureStatus, captureMethod: CaptureMethod): StatusConfig {
   switch (status) {
     case 'recording':
       return {
@@ -57,8 +61,8 @@ function getStatusConfig(status: VoiceCaptureStatus): StatusConfig {
       return {
         buttonClass: 'border-certvoice-amber bg-certvoice-amber/15 animate-pulse-process',
         iconColor: 'text-certvoice-amber',
-        label: 'Processing...',
-        sublabel: 'Extracting fields',
+        label: captureMethod === 'mediarecorder' ? 'Transcribing...' : 'Processing...',
+        sublabel: captureMethod === 'mediarecorder' ? 'Converting speech to text' : 'Extracting fields',
       }
     case 'error':
       return {
@@ -72,7 +76,7 @@ function getStatusConfig(status: VoiceCaptureStatus): StatusConfig {
         buttonClass: 'border-certvoice-border bg-certvoice-surface-2 opacity-50',
         iconColor: 'text-certvoice-muted',
         label: 'Not Supported',
-        sublabel: 'Use Chrome or Edge',
+        sublabel: 'Please update your browser',
       }
     default:
       return {
@@ -137,14 +141,16 @@ export default function VoiceCapture({
     error,
     durationMs,
     isSupported,
+    captureMethod,
     startRecording,
     stopRecording,
     reset,
   } = useVoiceCapture()
 
-  const config = getStatusConfig(status)
+  const config = getStatusConfig(status, captureMethod)
   const isRecording = status === 'recording'
-  const isDisabled = disabled || status === 'unsupported' || status === 'processing'
+  const isProcessing = status === 'processing'
+  const isDisabled = disabled || status === 'unsupported' || isProcessing
 
   // Track errors via useEffect so it fires once per error, not every render
   const lastTrackedErrorRef = useRef<string | null>(null)
@@ -158,13 +164,13 @@ export default function VoiceCapture({
     }
   }, [error])
 
-  // --- Handle mic button tap ---
-  const handleMicTap = useCallback(() => {
+  // --- Handle mic button tap (async for MediaRecorder path) ---
+  const handleMicTap = useCallback(async () => {
     if (isDisabled) return
 
     if (isRecording) {
-      // Stop recording → get transcript directly from ref via return value
-      const transcript = stopRecording()
+      // Stop recording → get transcript (may be async for MediaRecorder path)
+      const transcript = await stopRecording()
       if (transcript) {
         onTranscript(transcript, durationMs)
         trackVoiceComplete(durationMs, transcript.length)
@@ -204,7 +210,9 @@ export default function VoiceCapture({
         aria-label={isRecording ? 'Stop recording' : 'Start recording'}
         type="button"
       >
-        {isRecording ? (
+        {isProcessing ? (
+          <Loader2 className="w-5 h-5 text-certvoice-amber animate-spin" />
+        ) : isRecording ? (
           <div className="w-4 h-4 bg-certvoice-red rounded-sm" />
         ) : (
           <Mic className={`w-5 h-5 ${config.iconColor}`} />
@@ -226,10 +234,10 @@ export default function VoiceCapture({
           ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
           ${config.buttonClass}
         `}
-        aria-label={isRecording ? 'Stop recording' : 'Start recording'}
+        aria-label={isRecording ? 'Stop recording' : isProcessing ? 'Processing' : 'Start recording'}
         type="button"
       >
-        {status === 'processing' ? (
+        {isProcessing ? (
           <Loader2 className={`w-8 h-8 ${config.iconColor} animate-spin`} />
         ) : !isSupported ? (
           <MicOff className={`w-8 h-8 ${config.iconColor}`} />
@@ -248,7 +256,9 @@ export default function VoiceCapture({
               ? 'text-certvoice-red'
               : status === 'error'
                 ? 'text-certvoice-red'
-                : 'text-certvoice-muted'
+                : isProcessing
+                  ? 'text-certvoice-amber'
+                  : 'text-certvoice-muted'
           }`}
         >
           {config.label}
@@ -259,7 +269,7 @@ export default function VoiceCapture({
       </div>
 
       {/* Duration */}
-      {(isRecording || durationMs > 0) && status !== 'idle' && (
+      {(isRecording || isProcessing || durationMs > 0) && status !== 'idle' && (
         <div className="mt-2 font-mono text-xs text-certvoice-muted">
           {formatDuration(durationMs)}
         </div>
@@ -267,6 +277,14 @@ export default function VoiceCapture({
 
       {/* Waveform */}
       <Waveform visible={isRecording} />
+
+      {/* Capture method indicator */}
+      {isRecording && captureMethod === 'mediarecorder' && (
+        <div className="mt-2 flex items-center gap-1 text-[10px] text-certvoice-muted/60">
+          <Wifi className="w-3 h-3" />
+          Server transcription
+        </div>
+      )}
 
       {/* Live Transcript */}
       {liveTranscript && (
@@ -276,6 +294,9 @@ export default function VoiceCapture({
               <span className="cv-section-title">Voice Transcript</span>
               {isRecording && (
                 <span className="cv-badge-fail text-[9px]">LIVE</span>
+              )}
+              {isProcessing && (
+                <span className="cv-badge-warning text-[9px]">PROCESSING</span>
               )}
             </div>
             <div
@@ -306,8 +327,14 @@ export default function VoiceCapture({
               )}
               {error.type === 'unsupported' && (
                 <p className="text-xs text-certvoice-muted mt-1">
-                  CertVoice voice capture works best in Chrome or Edge browsers.
+                  CertVoice voice capture requires a modern browser.
                   You can still use manual entry for all fields.
+                </p>
+              )}
+              {error.type === 'transcription-failed' && (
+                <p className="text-xs text-certvoice-muted mt-1">
+                  Check your internet connection and try again. If the problem
+                  persists, try using Chrome on a desktop computer.
                 </p>
               )}
             </div>
