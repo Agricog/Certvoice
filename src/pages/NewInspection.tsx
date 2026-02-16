@@ -264,7 +264,7 @@ export default function NewInspection() {
 
       // TODO: Save to database via API
       // For now, pass via navigation state
-      navigate('/inspection/capture', { state: { certificate } })
+      navigate(`/inspect/${certificate.id}`, { state: { certificate } })
     } catch (error) {
       captureError(error, 'NewInspection.handleCreate')
     }
