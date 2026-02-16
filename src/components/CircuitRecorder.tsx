@@ -24,6 +24,7 @@ import type {
   RCDType,
   TickStatus,
 } from '../types/eicr'
+import { getMaxZs } from '../utils/zsLookup'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -375,6 +376,7 @@ export default function CircuitRecorder({
   }))
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const maxZsManualRef = useRef(false) // tracks if user manually edited max_zs
 
   // Voice recording state
   const [isRecording, setIsRecording] = useState(false)
@@ -550,6 +552,21 @@ export default function CircuitRecorder({
   const zsWarning = isZsExceeded(formData.measured_zs, formData.max_zs)
     ? `Measured Zs (${formData.measured_zs}Ω) exceeds max permitted (${formData.max_zs}Ω)`
     : undefined
+
+  // ── Auto-fill max Zs from BS 7671 lookup ──────────────────────────────────
+
+  useEffect(() => {
+    // Don't overwrite if user manually edited the field
+    if (maxZsManualRef.current) return
+
+    const rating = parseFloat(formData.ocpd_rating)
+    const disconnectTime = parseFloat(formData.max_disconnection_time) || null
+    const calculated = getMaxZs(formData.ocpd_type, isNaN(rating) ? null : rating, disconnectTime)
+
+    if (calculated !== null) {
+      setFormData((prev) => ({ ...prev, max_zs: calculated.toFixed(2) }))
+    }
+  }, [formData.ocpd_type, formData.ocpd_rating, formData.max_disconnection_time])
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────
 
@@ -783,9 +800,13 @@ export default function CircuitRecorder({
             <TextField
               label="Max Zs"
               value={formData.max_zs}
-              onChange={(v) => updateField('max_zs', v)}
+              onChange={(v) => {
+                maxZsManualRef.current = true
+                updateField('max_zs', v)
+              }}
               inputMode="decimal"
               suffix="Ω"
+              placeholder={formData.ocpd_type && formData.ocpd_rating ? 'Auto' : ''}
             />
             <TextField
               label="Measured Zs"
