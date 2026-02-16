@@ -234,7 +234,7 @@ export default function CircuitRecorder({
   // Primary fields (always visible)
   const primaryFields: Array<{
     label: string
-    field: keyof CircuitDetail
+    field: keyof CircuitDetail | null
     value: string
     highlight?: 'pass' | 'fail' | 'warning'
   }> = [
@@ -250,7 +250,7 @@ export default function CircuitRecorder({
     },
     {
       label: 'Location',
-      field: 'circuitDescription',
+      field: null,
       value: locationContext || '—',
     },
     {
