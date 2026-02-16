@@ -108,30 +108,26 @@ export default function InspectionCapture() {
   // --- Certificate state ---
   const stateCert = (location.state as { certificate?: Partial<EICRCertificate> })?.certificate
 
+const defaultBoards: DistributionBoardHeader[] = [
+  {
+    dbReference: 'DB1',
+    dbLocation: 'Main consumer unit',
+  } as DistributionBoardHeader,
+]
+
+const { distributionBoards: stateBoards, ...restStateCert } = stateCert ?? {}
+
 const initialCert: Partial<EICRCertificate> = {
   id: crypto.randomUUID(),
   reportNumber: `CV-${Date.now().toString(36).toUpperCase()}`,
   status: 'DRAFT' as const,
   observations: [],
   circuits: [],
-  distributionBoards: [
-    {
-      dbReference: 'DB1',
-      dbLocation: 'Main consumer unit',
-    } as DistributionBoardHeader,
-  ],
   inspectionSchedule: [],
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
-  ...stateCert,
-  distributionBoards: stateCert?.distributionBoards?.length
-    ? stateCert.distributionBoards
-    : [
-        {
-          dbReference: 'DB1',
-          dbLocation: 'Main consumer unit',
-        } as DistributionBoardHeader,
-      ],
+  ...restStateCert,
+  distributionBoards: stateBoards?.length ? stateBoards : defaultBoards,
 }
 
   const [certificate, setCertificate] = useState<Partial<EICRCertificate>>(initialCert)
