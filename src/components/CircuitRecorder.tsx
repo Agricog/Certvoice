@@ -1,54 +1,75 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
-import { useAuth } from '@clerk/clerk-react';
-import { Mic, MicOff, ChevronDown, ChevronUp, Check, X, AlertTriangle, Loader2 } from 'lucide-react';
-import DOMPurify from 'dompurify';
-import type { CircuitDetail } from '../types/eicr';
+/**
+ * CertVoice — CircuitRecorder Component
+ *
+ * Two modes:
+ *   - 'voice': Record audio → transcribe → AI extract → review grid
+ *   - 'manual': Jump straight to review grid for typed entry
+ *
+ * Props match what InspectionCapture already passes.
+ * All form values map to CircuitDetail via mapFormToCircuitDetail().
+ *
+ * @module components/CircuitRecorder
+ */
+
+import { useState, useCallback, useRef, useEffect } from 'react'
+import { useAuth } from '@clerk/clerk-react'
+import { Mic, MicOff, ChevronDown, ChevronUp, Check, X, AlertTriangle, Loader2 } from 'lucide-react'
+import DOMPurify from 'dompurify'
+import type {
+  CircuitDetail,
+  EarthingType,
+  WiringTypeCode,
+  ReferenceMethod,
+  OCPDType,
+  RCDType,
+  TickStatus,
+} from '../types/eicr'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface CircuitFormData {
-  circuit_number: string;
-  description: string;
-  type_of_wiring: string;
-  reference_method: string;
-  number_of_points: string;
-  ocpd_bs_en: string;
-  ocpd_type: string;
-  ocpd_rating: string;
-  ocpd_short_circuit_capacity: string;
-  max_disconnection_time: string;
-  live_csa: string;
-  cpc_csa: string;
-  max_zs: string;
-  measured_zs: string;
-  r1_plus_r2: string;
-  r2: string;
-  ring_r1: string;
-  ring_rn: string;
-  ring_r2: string;
-  insulation_live_live: string;
-  insulation_live_earth: string;
-  polarity_confirmed: boolean;
-  rcd_type: string;
-  rcd_rated_current: string;
-  rcd_operating_time: string;
-  rcd_test_button_ok: boolean;
-  afdd_fitted: boolean;
-  spd_fitted: boolean;
-  comments: string;
+  circuit_number: string
+  description: string
+  type_of_wiring: WiringTypeCode | ''
+  reference_method: ReferenceMethod | ''
+  number_of_points: string
+  ocpd_bs_en: string
+  ocpd_type: OCPDType | ''
+  ocpd_rating: string
+  ocpd_short_circuit_capacity: string
+  max_disconnection_time: string
+  live_csa: string
+  cpc_csa: string
+  max_zs: string
+  measured_zs: string
+  r1_plus_r2: string
+  r2: string
+  ring_r1: string
+  ring_rn: string
+  ring_r2: string
+  insulation_live_live: string
+  insulation_live_earth: string
+  polarity_confirmed: TickStatus
+  rcd_type: RCDType | ''
+  rcd_rated_current: string
+  rcd_operating_time: string
+  rcd_test_button_ok: TickStatus
+  afdd_fitted: TickStatus
+  spd_fitted: boolean
+  comments: string
 }
 
 interface CircuitRecorderProps {
-  mode: 'voice' | 'manual';
-  locationContext: string;
-  dbContext: string;
-  existingCircuits: string[];
-  earthingType: string | null;
-  onCircuitConfirmed: (data: Partial<CircuitDetail>) => void;
-  onCancel: () => void;
+  mode: 'voice' | 'manual'
+  locationContext: string
+  dbContext: string
+  existingCircuits: string[]
+  earthingType: EarthingType | null
+  onCircuitConfirmed: (data: Partial<CircuitDetail>) => void
+  onCancel: () => void
 }
 
-type RecorderStep = 'idle' | 'recording' | 'transcribing' | 'extracting' | 'review';
+type RecorderStep = 'idle' | 'recording' | 'transcribing' | 'extracting' | 'review'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -74,40 +95,57 @@ const EMPTY_FORM: CircuitFormData = {
   ring_r2: '',
   insulation_live_live: '',
   insulation_live_earth: '',
-  polarity_confirmed: false,
+  polarity_confirmed: 'NA',
   rcd_type: '',
   rcd_rated_current: '',
   rcd_operating_time: '',
-  rcd_test_button_ok: false,
-  afdd_fitted: false,
+  rcd_test_button_ok: 'NA',
+  afdd_fitted: 'NA',
   spd_fitted: false,
   comments: '',
-};
+}
 
-const WIRING_TYPES = ['T+E', 'SWA', 'MICC', 'FP200', 'Flex', 'Conduit/SCC', 'Trunking/SCC', 'Other'];
-const REFERENCE_METHODS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
-const OCPD_TYPES = ['B', 'C', 'D', '1', '2', '3', '4'];
-const RCD_TYPES = ['AC', 'A', 'F', 'B', 'S', 'None'];
-const COMMON_RATINGS = ['6', '10', '16', '20', '25', '32', '40', '45', '50', '63', '80', '100'];
-const COMMON_CSA = ['1.0', '1.5', '2.5', '4.0', '6.0', '10.0', '16.0', '25.0'];
+/** BS 7671 Appendix 6 Column 3 codes */
+const WIRING_TYPES: { code: WiringTypeCode; label: string }[] = [
+  { code: 'A', label: 'A — T&E' },
+  { code: 'B', label: 'B — PVC/metallic conduit' },
+  { code: 'C', label: 'C — PVC/non-metallic conduit' },
+  { code: 'D', label: 'D — PVC/metallic trunking' },
+  { code: 'E', label: 'E — PVC/non-metallic trunking' },
+  { code: 'F', label: 'F — PVC SWA' },
+  { code: 'G', label: 'G — XLPE SWA' },
+  { code: 'H', label: 'H — MI' },
+  { code: 'O', label: 'O — Other' },
+]
+
+const REFERENCE_METHODS: ReferenceMethod[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
+const OCPD_TYPES: OCPDType[] = ['B', 'C', 'D']
+const RCD_TYPES: RCDType[] = ['AC', 'A', 'F', 'B', 'S']
+const TICK_OPTIONS: { value: TickStatus; label: string }[] = [
+  { value: 'TICK', label: '✓' },
+  { value: 'CROSS', label: '✗' },
+  { value: 'NA', label: 'N/A' },
+]
+const COMMON_RATINGS = ['6', '10', '16', '20', '25', '32', '40', '45', '50', '63', '80', '100']
+const COMMON_CSA = ['1.0', '1.5', '2.5', '4.0', '6.0', '10.0', '16.0', '25.0']
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function sanitize(value: string): string {
-  return DOMPurify.sanitize(value.trim(), { ALLOWED_TAGS: [] });
+  return DOMPurify.sanitize(value.trim(), { ALLOWED_TAGS: [] })
 }
 
 function isZsExceeded(measured: string, max: string): boolean {
-  const m = parseFloat(measured);
-  const x = parseFloat(max);
-  if (isNaN(m) || isNaN(x) || x === 0) return false;
-  return m > x;
+  const m = parseFloat(measured)
+  const x = parseFloat(max)
+  if (isNaN(m) || isNaN(x) || x === 0) return false
+  return m > x
 }
 
 function toNum(val: string): number | null {
-  if (!val.trim()) return null;
-  const n = parseFloat(val);
-  return isNaN(n) ? null : n;
+  if (!val.trim()) return null
+  const n = parseFloat(val)
+  return isNaN(n) ? null : n
 }
 
 function mapFormToCircuitDetail(f: CircuitFormData): Partial<CircuitDetail> {
@@ -133,14 +171,14 @@ function mapFormToCircuitDetail(f: CircuitFormData): Partial<CircuitDetail> {
     r2: toNum(f.ring_r2),
     irLiveLive: toNum(f.insulation_live_live),
     irLiveEarth: toNum(f.insulation_live_earth),
-    polarity: f.polarity_confirmed ? 'CONFIRMED' : 'NA',
+    polarity: f.polarity_confirmed,
     rcdType: f.rcd_type || null,
     rcdRating: toNum(f.rcd_rated_current),
     rcdDisconnectionTime: toNum(f.rcd_operating_time),
-    rcdTestButton: f.rcd_test_button_ok ? 'PASS' : 'NA',
-    afddTestButton: f.afdd_fitted ? 'PASS' : 'NA',
+    rcdTestButton: f.rcd_test_button_ok,
+    afddTestButton: f.afdd_fitted,
     remarks: f.comments,
-  };
+  }
 }
 
 // ─── Section Component ────────────────────────────────────────────────────────
@@ -150,11 +188,11 @@ function FormSection({
   children,
   defaultOpen = true,
 }: {
-  title: string;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
+  title: string
+  children: React.ReactNode
+  defaultOpen?: boolean
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useState(defaultOpen)
 
   return (
     <div className="border border-slate-700 rounded-lg overflow-hidden mb-3">
@@ -168,7 +206,7 @@ function FormSection({
       </button>
       {open && <div className="p-4 space-y-3 bg-slate-900">{children}</div>}
     </div>
-  );
+  )
 }
 
 // ─── Field Components ─────────────────────────────────────────────────────────
@@ -182,13 +220,13 @@ function TextField({
   warning,
   inputMode,
 }: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  suffix?: string;
-  warning?: string;
-  inputMode?: 'text' | 'numeric' | 'decimal';
+  label: string
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+  suffix?: string
+  warning?: string
+  inputMode?: 'text' | 'numeric' | 'decimal'
 }) {
   return (
     <div>
@@ -217,39 +255,75 @@ function TextField({
         </div>
       )}
     </div>
-  );
+  )
 }
 
-function SelectField({
+function SelectField<T extends string>({
   label,
   value,
   onChange,
   options,
   placeholder,
 }: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: string[];
-  placeholder?: string;
+  label: string
+  value: T | ''
+  onChange: (v: T | '') => void
+  options: { value: T; label: string }[]
+  placeholder?: string
 }) {
   return (
     <div>
       <label className="block text-xs text-slate-400 mb-1">{label}</label>
       <select
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => onChange(e.target.value as T | '')}
         className="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
       >
         <option value="">{placeholder || 'Select...'}</option>
         {options.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt}
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
           </option>
         ))}
       </select>
     </div>
-  );
+  )
+}
+
+function TickField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: TickStatus
+  onChange: (v: TickStatus) => void
+}) {
+  return (
+    <div>
+      <label className="block text-xs text-slate-400 mb-1">{label}</label>
+      <div className="flex gap-1">
+        {TICK_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            className={`flex-1 py-2 rounded-md text-sm font-semibold border transition-colors ${
+              value === opt.value
+                ? opt.value === 'TICK'
+                  ? 'bg-green-900/40 border-green-600 text-green-300'
+                  : opt.value === 'CROSS'
+                  ? 'bg-red-900/40 border-red-600 text-red-300'
+                  : 'bg-slate-700 border-slate-500 text-slate-300'
+                : 'bg-slate-800 border-slate-600 text-slate-500'
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function ToggleField({
@@ -257,9 +331,9 @@ function ToggleField({
   value,
   onChange,
 }: {
-  label: string;
-  value: boolean;
-  onChange: (v: boolean) => void;
+  label: string
+  value: boolean
+  onChange: (v: boolean) => void
 }) {
   return (
     <button
@@ -280,102 +354,102 @@ function ToggleField({
       </div>
       {label}
     </button>
-  );
+  )
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function CircuitRecorder({
   mode,
-  locationContext,
+  locationContext: _locationContext,
   dbContext,
-  existingCircuits,
-  earthingType,
+  existingCircuits: _existingCircuits,
+  earthingType: _earthingType,
   onCircuitConfirmed,
   onCancel,
 }: CircuitRecorderProps) {
-  const { getToken } = useAuth();
-  const [step, setStep] = useState<RecorderStep>(mode === 'manual' ? 'review' : 'idle');
+  const { getToken } = useAuth()
+  const [step, setStep] = useState<RecorderStep>(mode === 'manual' ? 'review' : 'idle')
   const [formData, setFormData] = useState<CircuitFormData>(() => ({
     ...EMPTY_FORM,
-  }));
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  }))
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // Voice recording state
-  const [isRecording, setIsRecording] = useState(false);
-  const [audioLevel, setAudioLevel] = useState(0);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const animFrameRef = useRef<number | null>(null);
+  const [isRecording, setIsRecording] = useState(false)
+  const [audioLevel, setAudioLevel] = useState(0)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const animFrameRef = useRef<number | null>(null)
 
   // ── Voice recording ───────────────────────────────────────────────────────
 
   const startRecording = useCallback(async () => {
     try {
-      setError(null);
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setError(null)
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
 
       // Audio level visualisation
-      const audioCtx = new AudioContext();
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      source.connect(analyser);
-      analyserRef.current = analyser;
+      const audioCtx = new AudioContext()
+      const source = audioCtx.createMediaStreamSource(stream)
+      const analyser = audioCtx.createAnalyser()
+      analyser.fftSize = 256
+      source.connect(analyser)
+      analyserRef.current = analyser
 
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const dataArray = new Uint8Array(analyser.frequencyBinCount)
       const updateLevel = () => {
-        analyser.getByteFrequencyData(dataArray);
-        const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
-        setAudioLevel(avg / 255);
-        animFrameRef.current = requestAnimationFrame(updateLevel);
-      };
-      updateLevel();
+        analyser.getByteFrequencyData(dataArray)
+        const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length
+        setAudioLevel(avg / 255)
+        animFrameRef.current = requestAnimationFrame(updateLevel)
+      }
+      updateLevel()
 
       // MediaRecorder — use webm where supported, fall back to mp4 for Safari
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
-        : 'audio/mp4';
+        : 'audio/mp4'
 
-      const recorder = new MediaRecorder(stream, { mimeType });
-      audioChunksRef.current = [];
+      const recorder = new MediaRecorder(stream, { mimeType })
+      audioChunksRef.current = []
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
+        if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
 
       recorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-        setAudioLevel(0);
+        stream.getTracks().forEach((t) => t.stop())
+        if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+        setAudioLevel(0)
 
-        const blob = new Blob(audioChunksRef.current, { type: mimeType });
-        await transcribeAudio(blob);
-      };
+        const blob = new Blob(audioChunksRef.current, { type: mimeType })
+        await transcribeAudio(blob)
+      }
 
-      mediaRecorderRef.current = recorder;
-      recorder.start();
-      setIsRecording(true);
-      setStep('recording');
-    } catch (err) {
-      setError('Microphone access denied. Check browser permissions.');
+      mediaRecorderRef.current = recorder
+      recorder.start()
+      setIsRecording(true)
+      setStep('recording')
+    } catch {
+      setError('Microphone access denied. Check browser permissions.')
     }
-  }, []);
+  }, [])
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      setStep('transcribing');
+      mediaRecorderRef.current.stop()
+      setIsRecording(false)
+      setStep('transcribing')
     }
-  }, []);
+  }, [])
 
   const transcribeAudio = async (blob: Blob) => {
     try {
-      const token = await getToken();
-      const apiBase = import.meta.env.VITE_API_BASE_URL;
+      const token = await getToken()
+      const apiBase = import.meta.env.VITE_API_BASE_URL
 
       const res = await fetch(`${apiBase}/api/speech/transcribe`, {
         method: 'POST',
@@ -384,29 +458,28 @@ export default function CircuitRecorder({
           'Content-Type': blob.type,
         },
         body: blob,
-      });
+      })
 
-      if (!res.ok) throw new Error(`Transcription failed (${res.status})`);
+      if (!res.ok) throw new Error(`Transcription failed (${res.status})`)
 
-      const data = await res.json();
+      const data = await res.json()
       if (!data.success || !data.transcript) {
-        throw new Error('No transcript returned');
+        throw new Error('No transcript returned')
       }
 
-      setStep('extracting');
-      await extractCircuitData(data.transcript);
+      setStep('extracting')
+      await extractCircuitData(data.transcript)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Transcription failed');
-      setStep('idle');
+      setError(err instanceof Error ? err.message : 'Transcription failed')
+      setStep('idle')
     }
-  };
+  }
 
   const extractCircuitData = async (transcript: string) => {
     try {
-      const token = await getToken();
-      const apiBase = import.meta.env.VITE_API_BASE_URL;
+      const token = await getToken()
+      const apiBase = import.meta.env.VITE_API_BASE_URL
 
-      // Call AI extraction endpoint (assumes a worker at /api/extract/circuit)
       const res = await fetch(`${apiBase}/api/extract/circuit`, {
         method: 'POST',
         headers: {
@@ -414,80 +487,80 @@ export default function CircuitRecorder({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ transcript, dbContext }),
-      });
+      })
 
-      if (!res.ok) throw new Error(`Extraction failed (${res.status})`);
+      if (!res.ok) throw new Error(`Extraction failed (${res.status})`)
 
-      const data = await res.json();
+      const data = await res.json()
       if (data.success && data.circuit) {
-        setFormData((prev) => ({ ...prev, ...data.circuit }));
+        setFormData((prev) => ({ ...prev, ...data.circuit }))
       }
 
-      setStep('review');
-    } catch (err) {
+      setStep('review')
+    } catch {
       // If extraction fails, still show review grid with transcript in comments
       setFormData((prev) => ({
         ...prev,
         comments: `[Voice transcript] ${transcript}`,
-      }));
-      setStep('review');
+      }))
+      setStep('review')
     }
-  };
+  }
 
   // ── Form handlers ─────────────────────────────────────────────────────────
 
   const updateField = useCallback(
     <K extends keyof CircuitFormData>(key: K, value: CircuitFormData[K]) => {
-      setFormData((prev) => ({ ...prev, [key]: value }));
+      setFormData((prev) => ({ ...prev, [key]: value }))
     },
     []
-  );
+  )
 
   const handleConfirm = async () => {
     // Sanitize all string fields before submission
-    const sanitized: CircuitFormData = { ...formData };
+    const sanitized: CircuitFormData = { ...formData }
     for (const key of Object.keys(sanitized) as (keyof CircuitFormData)[]) {
-      const val = sanitized[key];
+      const val = sanitized[key]
       if (typeof val === 'string') {
-        (sanitized[key] as string) = sanitize(val);
+        ;(sanitized[key] as string) = sanitize(val)
       }
     }
 
     // Basic validation — circuit number is required
     if (!sanitized.circuit_number.trim()) {
-      setError('Circuit number is required');
-      return;
+      setError('Circuit number is required')
+      return
     }
 
-    setIsSubmitting(true);
-    setError(null);
+    setIsSubmitting(true)
+    setError(null)
 
     try {
-      const mapped = mapFormToCircuitDetail(sanitized);
-      onCircuitConfirmed(mapped);
+      const mapped = mapFormToCircuitDetail(sanitized)
+      onCircuitConfirmed(mapped)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save circuit');
+      setError(err instanceof Error ? err.message : 'Failed to save circuit')
     } finally {
-      setIsSubmitting(false);
+      setIsSubmitting(false)
     }
-  };
+  }
 
   // ── Zs warning ────────────────────────────────────────────────────────────
 
   const zsWarning = isZsExceeded(formData.measured_zs, formData.max_zs)
     ? `Measured Zs (${formData.measured_zs}Ω) exceeds max permitted (${formData.max_zs}Ω)`
-    : undefined;
+    : undefined
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────
 
   useEffect(() => {
     return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
       if (mediaRecorderRef.current?.state === 'recording') {
-        mediaRecorderRef.current.stop();
+        mediaRecorderRef.current.stop()
       }
-    };
-  }, []);
+    }
+  }, [])
 
   // ── Render: Voice capture steps ───────────────────────────────────────────
 
@@ -512,11 +585,19 @@ export default function CircuitRecorder({
               }`}
               style={
                 isRecording
-                  ? { boxShadow: `0 0 0 ${4 + audioLevel * 20}px rgba(239,68,68,${0.15 + audioLevel * 0.3})` }
+                  ? {
+                      boxShadow: `0 0 0 ${4 + audioLevel * 20}px rgba(239,68,68,${
+                        0.15 + audioLevel * 0.3
+                      })`,
+                    }
                   : undefined
               }
             >
-              {isRecording ? <MicOff size={32} className="text-white" /> : <Mic size={32} className="text-white" />}
+              {isRecording ? (
+                <MicOff size={32} className="text-white" />
+              ) : (
+                <Mic size={32} className="text-white" />
+              )}
             </div>
           </button>
 
@@ -539,7 +620,7 @@ export default function CircuitRecorder({
           </button>
         </div>
       </div>
-    );
+    )
   }
 
   if (step === 'transcribing' || step === 'extracting') {
@@ -550,7 +631,7 @@ export default function CircuitRecorder({
           {step === 'transcribing' ? 'Transcribing audio...' : 'Extracting circuit data...'}
         </p>
       </div>
-    );
+    )
   }
 
   // ── Render: Review grid (shared by voice + manual) ────────────────────────
@@ -576,11 +657,7 @@ export default function CircuitRecorder({
           disabled={isSubmitting}
           className="flex items-center gap-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white text-sm font-medium px-3 py-1.5 rounded-md transition-colors"
         >
-          {isSubmitting ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : (
-            <Check size={14} />
-          )}
+          {isSubmitting ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
           Confirm
         </button>
       </div>
@@ -629,14 +706,14 @@ export default function CircuitRecorder({
             <SelectField
               label="Wiring Type"
               value={formData.type_of_wiring}
-              onChange={(v) => updateField('type_of_wiring', v)}
-              options={WIRING_TYPES}
+              onChange={(v) => updateField('type_of_wiring', v as WiringTypeCode | '')}
+              options={WIRING_TYPES.map((w) => ({ value: w.code, label: w.label }))}
             />
             <SelectField
               label="Ref. Method"
               value={formData.reference_method}
-              onChange={(v) => updateField('reference_method', v)}
-              options={REFERENCE_METHODS}
+              onChange={(v) => updateField('reference_method', v as ReferenceMethod | '')}
+              options={REFERENCE_METHODS.map((m) => ({ value: m, label: m }))}
             />
           </div>
         </FormSection>
@@ -653,14 +730,14 @@ export default function CircuitRecorder({
             <SelectField
               label="Type"
               value={formData.ocpd_type}
-              onChange={(v) => updateField('ocpd_type', v)}
-              options={OCPD_TYPES}
+              onChange={(v) => updateField('ocpd_type', v as OCPDType | '')}
+              options={OCPD_TYPES.map((t) => ({ value: t, label: t }))}
             />
             <SelectField
               label="Rating"
               value={formData.ocpd_rating}
               onChange={(v) => updateField('ocpd_rating', v)}
-              options={COMMON_RATINGS}
+              options={COMMON_RATINGS.map((r) => ({ value: r, label: `${r}A` }))}
               placeholder="A"
             />
             <TextField
@@ -687,14 +764,14 @@ export default function CircuitRecorder({
               label="Live CSA"
               value={formData.live_csa}
               onChange={(v) => updateField('live_csa', v)}
-              options={COMMON_CSA}
+              options={COMMON_CSA.map((c) => ({ value: c, label: `${c} mm²` }))}
               placeholder="mm²"
             />
             <SelectField
               label="CPC CSA"
               value={formData.cpc_csa}
               onChange={(v) => updateField('cpc_csa', v)}
-              options={COMMON_CSA}
+              options={COMMON_CSA.map((c) => ({ value: c, label: `${c} mm²` }))}
               placeholder="mm²"
             />
           </div>
@@ -736,7 +813,7 @@ export default function CircuitRecorder({
             />
           </div>
 
-          {/* Ring final continuity — only show if description suggests ring */}
+          {/* Ring final continuity */}
           <p className="text-xs text-slate-500 mt-2 mb-1">Ring Final Continuity</p>
           <div className="grid grid-cols-3 gap-3">
             <TextField
@@ -780,7 +857,7 @@ export default function CircuitRecorder({
           </div>
 
           <div className="mt-2">
-            <ToggleField
+            <TickField
               label="Polarity confirmed"
               value={formData.polarity_confirmed}
               onChange={(v) => updateField('polarity_confirmed', v)}
@@ -793,8 +870,8 @@ export default function CircuitRecorder({
           <SelectField
             label="RCD Type"
             value={formData.rcd_type}
-            onChange={(v) => updateField('rcd_type', v)}
-            options={RCD_TYPES}
+            onChange={(v) => updateField('rcd_type', v as RCDType | '')}
+            options={RCD_TYPES.map((t) => ({ value: t, label: t }))}
           />
           <div className="grid grid-cols-2 gap-3">
             <TextField
@@ -812,7 +889,7 @@ export default function CircuitRecorder({
               suffix="ms"
             />
           </div>
-          <ToggleField
+          <TickField
             label="Test button operates correctly"
             value={formData.rcd_test_button_ok}
             onChange={(v) => updateField('rcd_test_button_ok', v)}
@@ -822,8 +899,8 @@ export default function CircuitRecorder({
         {/* ── Additional ──────────────────────────────────────────────────── */}
         <FormSection title="Additional" defaultOpen={false}>
           <div className="flex gap-3 flex-wrap">
-            <ToggleField
-              label="AFDD fitted"
+            <TickField
+              label="AFDD test button"
               value={formData.afdd_fitted}
               onChange={(v) => updateField('afdd_fitted', v)}
             />
@@ -846,5 +923,5 @@ export default function CircuitRecorder({
         </FormSection>
       </div>
     </div>
-  );
+  )
 }
