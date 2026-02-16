@@ -4,7 +4,7 @@
  * Fetches the current engineer's profile from the engineer-settings worker
  * for auto-filling DeclarationForm (Section G).
  *
- * Maps SettingsPayload → EngineerProfile shape expected by DeclarationForm.
+ * Maps SettingsPayload → EngineerProfile shape from eicr.ts.
  *
  * Fetch strategy:
  *   - Fires once on mount (or when userId changes)
@@ -17,7 +17,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '@clerk/clerk-react'
-import type { EngineerProfile } from '../types/eicr'
+import type { EngineerProfile, TestInstruments } from '../types/eicr'
 
 // ============================================================
 // CONFIGURATION
@@ -62,21 +62,42 @@ interface SettingsPayload {
 // ============================================================
 
 /**
- * Map the worker's SettingsPayload to the EngineerProfile shape
- * expected by DeclarationForm's auto-fill logic.
+ * Map the worker's SettingsPayload to the full EngineerProfile
+ * interface from eicr.ts.
  *
- * Note: The engineer-settings worker does not store `position`
- * (job title), so it maps to empty string. The user fills it
- * manually or it stays from a previous edit.
+ * The engineer-settings worker stores test instrument serials
+ * individually, so we compose a TestInstruments object from them.
+ *
+ * `position` is not stored in the settings worker — stays empty,
+ * user fills it manually on the DeclarationForm.
  */
-function toEngineerProfile(payload: SettingsPayload): EngineerProfile {
+function toEngineerProfile(
+  payload: SettingsPayload,
+  userId: string
+): EngineerProfile {
+  // Compose test instruments from individual serial/cal fields
+  const testInstruments: TestInstruments = {
+    multifunctionInstrument: payload.mftSerial || '',
+    insulationResistance: payload.irTesterSerial || '',
+    continuity: payload.continuityTesterSerial || '',
+    earthElectrodeResistance: '',
+    earthFaultLoopImpedance: payload.loopTesterSerial || '',
+    rcdTester: payload.rcdTesterSerial || '',
+  }
+
   return {
+    userId,
     fullName: payload.fullName ?? '',
     companyName: payload.companyName ?? '',
     companyAddress: payload.companyAddress ?? '',
     position: '', // Not stored in engineer-settings — manual entry
     registrationNumber: payload.registrationNumber ?? '',
+    schemeBody: payload.registrationBody ?? '',
     signatureKey: payload.signatureKey ?? null,
+    testInstruments,
+    companyLogoKey: null, // Not yet implemented in settings
+    phone: payload.phone ?? '',
+    email: payload.email ?? '',
   }
 }
 
@@ -137,7 +158,7 @@ export default function useEngineerProfile(): UseEngineerProfileResult {
         }
 
         const data = (await response.json()) as SettingsPayload
-        setProfile(toEngineerProfile(data))
+        setProfile(toEngineerProfile(data, userId!))
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to load profile'
         setError(message)
