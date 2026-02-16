@@ -51,7 +51,7 @@ export interface UseVoiceCaptureReturn {
   durationMs: number
   isSupported: boolean
   startRecording: () => void
-  stopRecording: () => void
+  stopRecording: () => string
   reset: () => void
 }
 
@@ -237,8 +237,8 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
 
     recognition.onend = () => {
       stopDurationTimer()
-      // Whether auto-ended or manual, go idle
-      setStatus('idle')
+      // Preserve error status — onend fires after onerror
+      setStatus((prev) => (prev === 'error' ? prev : 'idle'))
     }
 
     recognitionRef.current = recognition
@@ -255,7 +255,9 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
   }, [isSupported, startDurationTimer, stopDurationTimer, mapError])
 
   // --- Stop Recording ---
-  const stopRecording = useCallback(() => {
+  // Returns the final transcript string directly from the ref
+  // (React state may not have flushed yet when the caller reads it)
+  const stopRecording = useCallback((): string => {
     stoppedManuallyRef.current = true
 
     if (recognitionRef.current) {
@@ -269,6 +271,8 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
     setFinalTranscript(final)
     setLiveTranscript(final)
     setStatus('idle')
+
+    return final
   }, [stopDurationTimer])
 
   // --- Reset ---
