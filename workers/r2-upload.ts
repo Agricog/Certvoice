@@ -36,7 +36,7 @@ import { Redis } from '@upstash/redis/cloudflare'
 // ============================================================
 
 interface Env {
-  CERTVOICE_BUCKET: R2Bucket
+  BUCKET: R2Bucket
   ALLOWED_ORIGIN: string
   CLERK_JWKS_URL: string
   UPSTASH_REDIS_REST_URL: string
@@ -311,7 +311,7 @@ async function handleDownloadUrl(
   }
 
   // Check file exists
-  const object = await env.CERTVOICE_BUCKET.get(key)
+  const object = await env.BUCKET.get(key)
   if (!object) {
     return jsonResponse({ error: 'File not found' }, 404, cors)
   }
@@ -352,7 +352,7 @@ async function handleDeleteFile(
     return jsonResponse({ error: 'Forbidden' }, 403, cors)
   }
 
-  await env.CERTVOICE_BUCKET.delete(key)
+  await env.BUCKET.delete(key)
 
   return jsonResponse({ deleted: true, key }, 200, cors)
 }
