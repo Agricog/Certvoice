@@ -10,8 +10,6 @@
  * @module services/uploadService
  */
 
-import { captureError } from '../utils/errorTracking'
-
 // ============================================================
 // CONFIG
 // ============================================================
@@ -104,10 +102,10 @@ export async function uploadFile(
     throw new Error((err as { error?: string }).error ?? `Upload URL failed (${urlRes.status})`)
   }
 
-  const { key, uploadEndpoint } = (await urlRes.json()) as UploadUrlResponse
+  const urlData = (await urlRes.json()) as UploadUrlResponse
 
   // Step 2: PUT binary to upload endpoint
-  const uploadRes = await fetch(`${BASE_URL}${uploadEndpoint}`, {
+  const uploadRes = await fetch(`${BASE_URL}${urlData.uploadEndpoint}`, {
     method: 'PUT',
     headers: {
       'Content-Type': contentType,
