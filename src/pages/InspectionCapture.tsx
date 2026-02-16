@@ -772,11 +772,13 @@ export default function InspectionCapture() {
 
       {showObservationRecorder && (
         <ObservationRecorder
+          certificateId={certificate.id ?? ''}
           locationContext={activeBoard?.dbLocation ?? ''}
           dbContext={activeBoard?.dbReference ?? 'DB1'}
           nextItemNumber={observations.length + 1}
           earthingType={earthingType}
           existingCircuits={boardCircuits.map((c) => c.circuitNumber ?? '')}
+          editingObservation={editingObsIndex !== null ? observations[editingObsIndex] ?? null : null}
           onObservationConfirmed={handleObservationConfirmed}
           onCancel={() => {
             setShowObservationRecorder(false)
