@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useAuth } from '@clerk/clerk-react';
-import { Mic, MicOff, Pencil, ChevronDown, ChevronUp, Check, X, AlertTriangle, Loader2 } from 'lucide-react';
+import { Mic, MicOff, ChevronDown, ChevronUp, Check, X, AlertTriangle, Loader2 } from 'lucide-react';
 import DOMPurify from 'dompurify';
+import type { CircuitDetail } from '../types/eicr';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,10 +40,11 @@ interface CircuitFormData {
 
 interface CircuitRecorderProps {
   mode: 'voice' | 'manual';
-  boardId: string;
-  certificateId: string;
-  existingCircuit?: Partial<CircuitFormData> & { id?: string };
-  onConfirm: (data: CircuitFormData) => void;
+  locationContext: string;
+  dbContext: string;
+  existingCircuits: string[];
+  earthingType: string | null;
+  onCircuitConfirmed: (data: Partial<CircuitDetail>) => void;
   onCancel: () => void;
 }
 
@@ -100,6 +102,45 @@ function isZsExceeded(measured: string, max: string): boolean {
   const x = parseFloat(max);
   if (isNaN(m) || isNaN(x) || x === 0) return false;
   return m > x;
+}
+
+function toNum(val: string): number | null {
+  if (!val.trim()) return null;
+  const n = parseFloat(val);
+  return isNaN(n) ? null : n;
+}
+
+function mapFormToCircuitDetail(f: CircuitFormData): Partial<CircuitDetail> {
+  return {
+    circuitNumber: f.circuit_number,
+    circuitDescription: f.description,
+    wiringType: f.type_of_wiring || null,
+    referenceMethod: f.reference_method || null,
+    numberOfPoints: toNum(f.number_of_points),
+    ocpdBsEn: f.ocpd_bs_en,
+    ocpdType: f.ocpd_type || null,
+    ocpdRating: toNum(f.ocpd_rating),
+    breakingCapacity: toNum(f.ocpd_short_circuit_capacity),
+    maxDisconnectTime: toNum(f.max_disconnection_time),
+    liveConductorCsa: toNum(f.live_csa),
+    cpcCsa: toNum(f.cpc_csa),
+    maxPermittedZs: toNum(f.max_zs),
+    zs: toNum(f.measured_zs),
+    r1r2: toNum(f.r1_plus_r2),
+    r2Standalone: toNum(f.r2),
+    r1: toNum(f.ring_r1),
+    rn: toNum(f.ring_rn),
+    r2: toNum(f.ring_r2),
+    irLiveLive: toNum(f.insulation_live_live),
+    irLiveEarth: toNum(f.insulation_live_earth),
+    polarity: f.polarity_confirmed ? 'CONFIRMED' : 'NA',
+    rcdType: f.rcd_type || null,
+    rcdRating: toNum(f.rcd_rated_current),
+    rcdDisconnectionTime: toNum(f.rcd_operating_time),
+    rcdTestButton: f.rcd_test_button_ok ? 'PASS' : 'NA',
+    afddTestButton: f.afdd_fitted ? 'PASS' : 'NA',
+    remarks: f.comments,
+  };
 }
 
 // ─── Section Component ────────────────────────────────────────────────────────
@@ -246,17 +287,17 @@ function ToggleField({
 
 export default function CircuitRecorder({
   mode,
-  boardId,
-  certificateId,
-  existingCircuit,
-  onConfirm,
+  locationContext,
+  dbContext,
+  existingCircuits,
+  earthingType,
+  onCircuitConfirmed,
   onCancel,
 }: CircuitRecorderProps) {
   const { getToken } = useAuth();
   const [step, setStep] = useState<RecorderStep>(mode === 'manual' ? 'review' : 'idle');
   const [formData, setFormData] = useState<CircuitFormData>(() => ({
     ...EMPTY_FORM,
-    ...existingCircuit,
   }));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -372,7 +413,7 @@ export default function CircuitRecorder({
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ transcript, certificateId, boardId }),
+        body: JSON.stringify({ transcript, dbContext }),
       });
 
       if (!res.ok) throw new Error(`Extraction failed (${res.status})`);
@@ -422,7 +463,8 @@ export default function CircuitRecorder({
     setError(null);
 
     try {
-      onConfirm(sanitized);
+      const mapped = mapFormToCircuitDetail(sanitized);
+      onCircuitConfirmed(mapped);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save circuit');
     } finally {
