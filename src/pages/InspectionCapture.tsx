@@ -106,23 +106,33 @@ export default function InspectionCapture() {
   const location = useLocation()
 
   // --- Certificate state ---
-  const initialCert = (location.state as { certificate?: Partial<EICRCertificate> })
-    ?.certificate ?? {
-    id: crypto.randomUUID(),
-    reportNumber: `CV-${Date.now().toString(36).toUpperCase()}`,
-    status: 'DRAFT' as const,
-    observations: [],
-    circuits: [],
-    distributionBoards: [
-      {
-        dbReference: 'DB1',
-        dbLocation: 'Main consumer unit',
-      } as DistributionBoardHeader,
-    ],
-    inspectionSchedule: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  }
+  const stateCert = (location.state as { certificate?: Partial<EICRCertificate> })?.certificate
+
+const initialCert: Partial<EICRCertificate> = {
+  id: crypto.randomUUID(),
+  reportNumber: `CV-${Date.now().toString(36).toUpperCase()}`,
+  status: 'DRAFT' as const,
+  observations: [],
+  circuits: [],
+  distributionBoards: [
+    {
+      dbReference: 'DB1',
+      dbLocation: 'Main consumer unit',
+    } as DistributionBoardHeader,
+  ],
+  inspectionSchedule: [],
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+  ...stateCert,
+  distributionBoards: stateCert?.distributionBoards?.length
+    ? stateCert.distributionBoards
+    : [
+        {
+          dbReference: 'DB1',
+          dbLocation: 'Main consumer unit',
+        } as DistributionBoardHeader,
+      ],
+}
 
   const [certificate, setCertificate] = useState<Partial<EICRCertificate>>(initialCert)
   const [activeTab, setActiveTab] = useState<CaptureTab>('circuits')
@@ -145,7 +155,10 @@ export default function InspectionCapture() {
 
   // Circuits for current board
   const boardCircuits = useMemo(
-    () => circuits.filter((c) => c.dbId === activeBoard?.dbReference),
+    () => {
+      if (!activeBoard?.dbReference) return circuits
+      return circuits.filter((c) => c.dbId === activeBoard.dbReference)
+    },
     [circuits, activeBoard]
   )
 
