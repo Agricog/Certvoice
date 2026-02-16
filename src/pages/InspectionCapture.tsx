@@ -2,7 +2,7 @@
  * CertVoice — InspectionCapture Page (with Persistence + Offline)
  *
  * Main capture workflow for an EICR inspection.
- * Orchestrates 4 tabs: Circuits, Observations, Supply, Checklist.
+ * Orchestrates 5 tabs: Circuits, Observations, Supply, Checklist, Declaration.
  *
  * Persistence strategy:
  *   1. On mount: load certificate from API (online) or IndexedDB (offline)
@@ -29,11 +29,13 @@ import {
   Loader2,
   Mic,
   Pencil,
+  FileSignature,
 } from 'lucide-react'
 import type {
   EICRCertificate,
   CircuitDetail,
   Observation,
+  Declaration,
   DistributionBoardHeader,
   SupplyCharacteristics,
   InstallationParticulars,
@@ -46,6 +48,7 @@ import ObservationRecorder from '../components/ObservationRecorder'
 import SupplyDetails from '../components/SupplyDetails'
 import InspectionChecklist from '../components/InspectionChecklist'
 import SyncIndicator from '../components/SyncIndicator'
+import DeclarationForm, { EMPTY_DECLARATION } from '../components/DeclarationForm'
 import { captureError } from '../utils/errorTracking'
 import { trackCircuitCaptured, trackObservationCaptured, trackChecklistProgress } from '../utils/analytics'
 import { saveCertificate as saveToLocal, getCertificate as getFromLocal } from '../services/offlineStore'
@@ -56,7 +59,7 @@ import { createSyncService } from '../services/syncService'
 // TYPES
 // ============================================================
 
-type CaptureTab = 'circuits' | 'observations' | 'supply' | 'checklist'
+type CaptureTab = 'circuits' | 'observations' | 'supply' | 'checklist' | 'declaration'
 type PageState = 'loading' | 'ready' | 'error'
 type RecorderMode = 'voice' | 'manual' | null
 
@@ -487,6 +490,20 @@ export default function InspectionCapture() {
   }, [persistCertificate])
 
   // ============================================================
+  // HANDLERS: DECLARATION
+  // ============================================================
+
+  const declaration = certificate.declaration ?? EMPTY_DECLARATION
+
+  const handleDeclarationChange = useCallback((updated: Declaration) => {
+    setCertificate((prev) => {
+      const cert = { ...prev, declaration: updated, updatedAt: new Date().toISOString() }
+      persistCertificate(cert)
+      return cert
+    })
+  }, [persistCertificate])
+
+  // ============================================================
   // HANDLERS: BOARDS
   // ============================================================
 
@@ -522,6 +539,7 @@ export default function InspectionCapture() {
     { id: 'observations', label: 'Observations', icon: AlertTriangle, count: observations.length },
     { id: 'supply', label: 'Supply', icon: Settings2 },
     { id: 'checklist', label: 'Checklist', icon: ClipboardList },
+    { id: 'declaration', label: 'Sign', icon: FileSignature },
   ]
 
   // ============================================================
@@ -811,6 +829,19 @@ export default function InspectionCapture() {
   )
 
   // ============================================================
+  // RENDER: DECLARATION TAB
+  // ============================================================
+
+  const renderDeclarationTab = () => (
+    <DeclarationForm
+      certificateId={certificate.id ?? ''}
+      declaration={declaration}
+      onDeclarationChange={handleDeclarationChange}
+      disabled={certificate.status === 'ISSUED'}
+    />
+  )
+
+  // ============================================================
   // RENDER: MAIN
   // ============================================================
 
@@ -819,6 +850,7 @@ export default function InspectionCapture() {
     observations: renderObservationsTab,
     supply: renderSupplyTab,
     checklist: renderChecklistTab,
+    declaration: renderDeclarationTab,
   }
 
   const address = certificate.installationDetails?.installationAddress ?? 'New Inspection'
