@@ -857,7 +857,7 @@ export default function NewInspection() {
 
         {/* Step Content */}
         <div className="cv-panel">
-          {CurrentStepRenderer ? <CurrentStepRenderer /> : null}
+          {CurrentStepRenderer ? CurrentStepRenderer() : null}
         </div>
 
         {/* Navigation Buttons */}
