@@ -24,8 +24,8 @@ import type { EngineerProfile, TestInstruments } from '../types/eicr'
 // ============================================================
 
 /** Engineer settings worker URL — matches vite proxy or direct worker URL */
-const ENGINEER_SETTINGS_URL =
-  import.meta.env.VITE_ENGINEER_SETTINGS_URL || '/api/engineer/settings'
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
+const ENGINEER_SETTINGS_URL = `${API_BASE}/api/engineer/settings`
 
 // ============================================================
 // TYPES — matches SettingsPayload from engineer-settings worker
