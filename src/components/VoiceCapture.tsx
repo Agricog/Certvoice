@@ -12,7 +12,7 @@
  * Used by CircuitRecorder, ObservationRecorder, and SupplyDetails.
  */
 
-import { useCallback } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { Mic, MicOff, AlertCircle, Loader2 } from 'lucide-react'
 import { useVoiceCapture } from '../hooks/useVoiceCapture'
 import type { VoiceCaptureStatus } from '../hooks/useVoiceCapture'
@@ -134,7 +134,6 @@ export default function VoiceCapture({
   const {
     status,
     liveTranscript,
-    finalTranscript,
     error,
     durationMs,
     isSupported,
@@ -147,14 +146,25 @@ export default function VoiceCapture({
   const isRecording = status === 'recording'
   const isDisabled = disabled || status === 'unsupported' || status === 'processing'
 
+  // Track errors via useEffect so it fires once per error, not every render
+  const lastTrackedErrorRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (error && error.type !== lastTrackedErrorRef.current) {
+      trackVoiceError(error.type)
+      lastTrackedErrorRef.current = error.type
+    }
+    if (!error) {
+      lastTrackedErrorRef.current = null
+    }
+  }, [error])
+
   // --- Handle mic button tap ---
   const handleMicTap = useCallback(() => {
     if (isDisabled) return
 
     if (isRecording) {
-      // Stop recording → deliver transcript
-      stopRecording()
-      const transcript = finalTranscript.trim()
+      // Stop recording → get transcript directly from ref via return value
+      const transcript = stopRecording()
       if (transcript) {
         onTranscript(transcript, durationMs)
         trackVoiceComplete(durationMs, transcript.length)
@@ -172,18 +182,12 @@ export default function VoiceCapture({
     isRecording,
     status,
     stopRecording,
-    finalTranscript,
     durationMs,
     onTranscript,
     reset,
     startRecording,
     locationContext,
   ])
-
-  // Track errors
-  if (error) {
-    trackVoiceError(error.type)
-  }
 
   // --- Compact mode (inline mic button only) ---
   if (compact) {
