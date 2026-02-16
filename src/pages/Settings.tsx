@@ -20,7 +20,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Helmet } from 'react-helmet-async'
 import { Link } from 'react-router-dom'
-import { useUser } from '@clerk/clerk-react'
+import { useUser, useAuth } from '@clerk/clerk-react'
 import {
   ArrowLeft,
   Save,
@@ -119,7 +119,8 @@ const REGISTRATION_BODIES: Array<{ value: RegistrationBody; label: string }> = [
   { value: 'OTHER', label: 'Other' },
 ]
 
-const API_URL = '/api/engineer/settings'
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
+const API_URL = `${API_BASE}/api/engineer/settings`
 
 // ============================================================
 // COMPONENT
@@ -127,6 +128,7 @@ const API_URL = '/api/engineer/settings'
 
 export default function Settings() {
   const { user } = useUser()
+  const { getToken } = useAuth()
 
   // --- State ---
   const [settings, setSettings] = useState<EngineerSettings>(EMPTY_SETTINGS)
@@ -165,9 +167,10 @@ export default function Settings() {
   const loadSettings = async () => {
     setLoading(true)
     try {
+      const token = await getToken()
       const response = await fetch(API_URL, {
         method: 'GET',
-        credentials: 'include',
+        headers: { Authorization: `Bearer ${token}` },
       })
 
       if (response.ok) {
@@ -223,10 +226,13 @@ export default function Settings() {
         sanitised.signatureDataUrl = canvasRef.current.toDataURL('image/png')
       }
 
+      const token = await getToken()
       const response = await fetch(API_URL, {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify(sanitised),
       })
 
