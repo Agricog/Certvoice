@@ -49,6 +49,7 @@ import SupplyDetails from '../components/SupplyDetails'
 import InspectionChecklist from '../components/InspectionChecklist'
 import SyncIndicator from '../components/SyncIndicator'
 import DeclarationForm, { EMPTY_DECLARATION } from '../components/DeclarationForm'
+import useEngineerProfile from '../hooks/useEngineerProfile'
 import { captureError } from '../utils/errorTracking'
 import { trackCircuitCaptured, trackObservationCaptured, trackChecklistProgress } from '../utils/analytics'
 import { saveCertificate as saveToLocal, getCertificate as getFromLocal } from '../services/offlineStore'
@@ -121,6 +122,9 @@ export default function InspectionCapture() {
   const params = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { getToken } = useAuth()
+
+  // --- Engineer profile for DeclarationForm auto-fill ---
+  const { profile: engineerProfile } = useEngineerProfile()
 
   // --- Page state ---
   const [pageState, setPageState] = useState<PageState>('loading')
@@ -837,6 +841,7 @@ export default function InspectionCapture() {
       certificateId={certificate.id ?? ''}
       declaration={declaration}
       onDeclarationChange={handleDeclarationChange}
+      engineerProfile={engineerProfile}
       disabled={certificate.status === 'ISSUED'}
     />
   )
