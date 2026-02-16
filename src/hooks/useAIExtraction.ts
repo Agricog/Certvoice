@@ -7,24 +7,24 @@
  * Flow:
  *   1. Voice transcript (from useVoiceCapture)
  *   2. Preprocessed by speechParser (trade terminology normalisation)
- *   3. Sent to /api/extract (Cloudflare Worker)
+ *   3. Sent to api.certvoice.co.uk/api/extract (Cloudflare Worker)
  *   4. Worker calls Claude API with system prompt + trade dictionary
  *   5. Returns structured data matching EICR types
  *
  * Security:
  *   - API key never touches the client (Worker holds it)
- *   - CSRF token included on all requests
+ *   - Clerk JWT Bearer token on every request
  *   - Rate limited: 60 extractions/hour per user
  *   - Transcript is NOT persisted server-side
  */
 
 import { useState, useCallback, useRef } from 'react'
+import { useAuth } from '@clerk/clerk-react'
 import type {
   AIExtractionRequest,
   AIExtractionResponse,
   AIExtractionError,
 } from '../types/api'
-import { getCsrfToken } from '../utils/csrf'
 import { preprocessTranscript } from '../utils/speechParser'
 import { captureAIError } from '../utils/errorTracking'
 import { trackAIExtraction, trackAIExtractionError } from '../utils/analytics'
@@ -67,7 +67,8 @@ export interface UseAIExtractionReturn {
 // CONSTANTS
 // ============================================================
 
-const EXTRACT_ENDPOINT = '/api/extract'
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
+const EXTRACT_ENDPOINT = `${API_BASE}/api/extract`
 const REQUEST_TIMEOUT_MS = 30_000 // 30 seconds max
 
 // ============================================================
@@ -75,6 +76,8 @@ const REQUEST_TIMEOUT_MS = 30_000 // 30 seconds max
 // ============================================================
 
 export function useAIExtraction(): UseAIExtractionReturn {
+  const { getToken } = useAuth()
+
   const [status, setStatus] = useState<ExtractionStatus>('idle')
   const [result, setResult] = useState<AIExtractionResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -125,8 +128,8 @@ export function useAIExtraction(): UseAIExtractionReturn {
         // Preprocess transcript (normalise trade terminology)
         const processedTranscript = preprocessTranscript(trimmed)
 
-        // Get CSRF token
-        const csrfToken = await getCsrfToken()
+        // Get Clerk JWT token
+        const token = await getToken()
 
         // Build request
         const requestBody: AIExtractionRequest = {
@@ -140,10 +143,9 @@ export function useAIExtraction(): UseAIExtractionReturn {
         // Send to proxy
         const response = await fetch(EXTRACT_ENDPOINT, {
           method: 'POST',
-          credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
-            'X-CSRF-Token': csrfToken,
+            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify(requestBody),
           signal: abortController.signal,
@@ -242,7 +244,7 @@ export function useAIExtraction(): UseAIExtractionReturn {
         abortControllerRef.current = null
       }
     },
-    []
+    [getToken]
   )
 
   // --- Reset ---
