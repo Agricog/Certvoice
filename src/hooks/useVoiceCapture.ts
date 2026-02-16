@@ -111,7 +111,7 @@ function isAnyCaptureSupported(): boolean {
   if (typeof window === 'undefined') return false
   // Either Web Speech API or MediaRecorder must be available
   const hasWebSpeech = !!(window.SpeechRecognition ?? window.webkitSpeechRecognition)
-  const hasMediaRecorder = !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder)
+  const hasMediaRecorder = !!(typeof navigator.mediaDevices?.getUserMedia === 'function' && typeof window.MediaRecorder === 'function')
   return hasWebSpeech || hasMediaRecorder
 }
 
