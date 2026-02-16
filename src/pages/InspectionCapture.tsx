@@ -1,23 +1,21 @@
 /**
- * CertVoice — InspectionCapture Page
+ * CertVoice — InspectionCapture Page (with Persistence + Offline)
  *
  * Main capture workflow for an EICR inspection.
  * Orchestrates 4 tabs: Circuits, Observations, Supply, Checklist.
  *
- * Receives a Partial<EICRCertificate> from NewInspection via
- * navigation state (location.state.certificate).
- *
- * Component prop interfaces (from actual deployed files):
- *   CircuitRecorder:     locationContext, dbContext, existingCircuits, earthingType, onCircuitConfirmed, onCancel
- *   ObservationRecorder: locationContext, dbContext, nextItemNumber, earthingType, existingCircuits, onObservationConfirmed, onCancel
- *   SupplyDetails:       supply, particulars, onSupplyChange, onParticularsChange
- *   InspectionChecklist: items, onItemChange, onBulkPass
+ * Persistence strategy:
+ *   1. On mount: load certificate from API (online) or IndexedDB (offline)
+ *   2. Every change: save to IndexedDB immediately, trigger background sync
+ *   3. SyncIndicator shows saved/syncing/offline/error status
+ *   4. Certificate created via API on first load if new
  *
  * @module pages/InspectionCapture
  */
 
-import { useState, useCallback, useMemo } from 'react'
-import { useLocation, Link } from 'react-router-dom'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useLocation, useParams, useNavigate, Link } from 'react-router-dom'
+import { useAuth } from '@clerk/clerk-react'
 import { Helmet } from 'react-helmet-async'
 import {
   ArrowLeft,
@@ -28,6 +26,7 @@ import {
   ClipboardList,
   Plus,
   Save,
+  Loader2,
 } from 'lucide-react'
 import type {
   EICRCertificate,
@@ -44,17 +43,22 @@ import CircuitRecorder from '../components/CircuitRecorder'
 import ObservationRecorder from '../components/ObservationRecorder'
 import SupplyDetails from '../components/SupplyDetails'
 import InspectionChecklist from '../components/InspectionChecklist'
+import SyncIndicator from '../components/SyncIndicator'
 import { captureError } from '../utils/errorTracking'
 import { trackCircuitCaptured, trackObservationCaptured, trackChecklistProgress } from '../utils/analytics'
+import { saveCertificate as saveToLocal, getCertificate as getFromLocal } from '../services/offlineStore'
+import { getCertificate as getFromApi, createCertificate } from '../services/certificateApi'
+import { createSyncService } from '../services/syncService'
 
 // ============================================================
 // TYPES
 // ============================================================
 
 type CaptureTab = 'circuits' | 'observations' | 'supply' | 'checklist'
+type PageState = 'loading' | 'ready' | 'error'
 
 // ============================================================
-// DEFAULT EMPTY SUPPLY / PARTICULARS
+// DEFAULTS
 // ============================================================
 
 const EMPTY_SUPPLY: SupplyCharacteristics = {
@@ -98,45 +102,180 @@ const EMPTY_PARTICULARS: InstallationParticulars = {
   bondingOther: 'NA',
 }
 
+const DEFAULT_BOARDS: DistributionBoardHeader[] = [
+  { dbReference: 'DB1', dbLocation: 'Main consumer unit' } as DistributionBoardHeader,
+]
+
 // ============================================================
 // COMPONENT
 // ============================================================
 
 export default function InspectionCapture() {
   const location = useLocation()
+  const params = useParams<{ id: string }>()
+  const navigate = useNavigate()
+  const { getToken } = useAuth()
+
+  // --- Page state ---
+  const [pageState, setPageState] = useState<PageState>('loading')
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   // --- Certificate state ---
-  const stateCert = (location.state as { certificate?: Partial<EICRCertificate> })?.certificate
-
-const defaultBoards: DistributionBoardHeader[] = [
-  {
-    dbReference: 'DB1',
-    dbLocation: 'Main consumer unit',
-  } as DistributionBoardHeader,
-]
-
-const { distributionBoards: stateBoards, ...restStateCert } = stateCert ?? {}
-
-const initialCert: Partial<EICRCertificate> = {
-  id: crypto.randomUUID(),
-  reportNumber: `CV-${Date.now().toString(36).toUpperCase()}`,
-  status: 'DRAFT' as const,
-  observations: [],
-  circuits: [],
-  inspectionSchedule: [],
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-  ...restStateCert,
-  distributionBoards: stateBoards?.length ? stateBoards : defaultBoards,
-}
-
-  const [certificate, setCertificate] = useState<Partial<EICRCertificate>>(initialCert)
+  const [certificate, setCertificate] = useState<Partial<EICRCertificate>>({})
   const [activeTab, setActiveTab] = useState<CaptureTab>('circuits')
   const [activeDbIndex, setActiveDbIndex] = useState(0)
   const [showCircuitRecorder, setShowCircuitRecorder] = useState(false)
   const [showObservationRecorder, setShowObservationRecorder] = useState(false)
   const [editingCircuitIndex, setEditingCircuitIndex] = useState<number | null>(null)
   const [editingObsIndex, setEditingObsIndex] = useState<number | null>(null)
+
+  // --- Sync service ---
+  const syncServiceRef = useRef<ReturnType<typeof createSyncService> | null>(null)
+
+  // --- Persist helper: saves to IndexedDB + triggers sync ---
+  const persistCertificate = useCallback(
+    async (cert: Partial<EICRCertificate>) => {
+      const certId = cert.id
+      if (!certId) return
+      try {
+        await saveToLocal(certId, cert, true)
+        syncServiceRef.current?.syncNow()
+      } catch (err) {
+        captureError(err, 'InspectionCapture.persistCertificate')
+      }
+    },
+    []
+  )
+
+  // ============================================================
+  // LOAD / CREATE CERTIFICATE ON MOUNT
+  // ============================================================
+
+  useEffect(() => {
+    const certIdFromUrl = params.id
+    const stateCert = (location.state as { certificate?: Partial<EICRCertificate> })?.certificate
+
+    async function loadOrCreate() {
+      try {
+        // Case 1: Existing certificate ID in URL — load it
+        if (certIdFromUrl) {
+          // Try API first (freshest data)
+          let loaded: Partial<EICRCertificate> | null = null
+
+          try {
+            loaded = await getFromApi(getToken, certIdFromUrl)
+          } catch {
+            // API failed — try IndexedDB
+            const local = await getFromLocal(certIdFromUrl)
+            if (local) loaded = local.data
+          }
+
+          if (loaded) {
+            // Ensure boards exist
+            if (!loaded.distributionBoards?.length) {
+              loaded.distributionBoards = DEFAULT_BOARDS
+            }
+            setCertificate(loaded)
+            await saveToLocal(certIdFromUrl, loaded, false)
+            setPageState('ready')
+            return
+          }
+        }
+
+        // Case 2: New certificate passed via navigation state
+        if (stateCert) {
+          // Create on API
+          try {
+            const created = await createCertificate(getToken, {
+              certificateType: 'EICR',
+              clientName: stateCert.clientDetails?.clientName ?? undefined,
+              clientAddress: stateCert.clientDetails?.clientAddress ?? undefined,
+              installationAddress: stateCert.installationDetails?.installationAddress ?? undefined,
+              installationPostcode: stateCert.installationDetails?.installationPostcode ?? undefined,
+              purpose: stateCert.reportReason?.purpose ?? undefined,
+              premisesType: stateCert.installationDetails?.premisesType ?? undefined,
+              extentOfInspection: stateCert.extentAndLimitations?.extentCovered ?? undefined,
+              agreedLimitations: stateCert.extentAndLimitations?.agreedLimitations ?? undefined,
+              operationalLimitations: stateCert.extentAndLimitations?.operationalLimitations ?? undefined,
+            })
+
+            const newCert: Partial<EICRCertificate> = {
+              ...stateCert,
+              id: created.id,
+              reportNumber: created.reportNumber,
+              status: created.status as EICRCertificate['status'],
+              distributionBoards: stateCert.distributionBoards?.length
+                ? stateCert.distributionBoards
+                : DEFAULT_BOARDS,
+              circuits: [],
+              observations: [],
+              inspectionSchedule: [],
+              createdAt: created.createdAt,
+              updatedAt: created.createdAt,
+            }
+
+            setCertificate(newCert)
+            await saveToLocal(created.id, newCert, false)
+
+            // Update URL to include the new ID
+            navigate(`/inspect/${created.id}`, { replace: true })
+            setPageState('ready')
+            return
+          } catch (err) {
+            // API failed — create locally with temp ID
+            const tempId = stateCert.id ?? crypto.randomUUID()
+            const localCert: Partial<EICRCertificate> = {
+              ...stateCert,
+              id: tempId,
+              reportNumber: stateCert.reportNumber ?? `CV-${Date.now().toString(36).toUpperCase()}`,
+              status: 'DRAFT' as const,
+              distributionBoards: stateCert.distributionBoards?.length
+                ? stateCert.distributionBoards
+                : DEFAULT_BOARDS,
+              circuits: [],
+              observations: [],
+              inspectionSchedule: [],
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            }
+
+            setCertificate(localCert)
+            await saveToLocal(tempId, localCert, true)
+            navigate(`/inspect/${tempId}`, { replace: true })
+            setPageState('ready')
+            captureError(err, 'InspectionCapture.createCertificate.apiDown')
+            return
+          }
+        }
+
+        // Case 3: No ID and no state — shouldn't happen, redirect
+        navigate('/', { replace: true })
+      } catch (err) {
+        captureError(err, 'InspectionCapture.loadOrCreate')
+        setLoadError('Failed to load certificate. Please try again.')
+        setPageState('error')
+      }
+    }
+
+    loadOrCreate()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ============================================================
+  // SYNC SERVICE LIFECYCLE
+  // ============================================================
+
+  useEffect(() => {
+    const service = createSyncService(getToken)
+    syncServiceRef.current = service
+    service.start()
+
+    return () => {
+      service.stop()
+      syncServiceRef.current = null
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // --- Derived state ---
   const boards = certificate.distributionBoards ?? []
@@ -146,10 +285,8 @@ const initialCert: Partial<EICRCertificate> = {
   const supply = certificate.supplyCharacteristics ?? EMPTY_SUPPLY
   const particulars = certificate.installationParticulars ?? EMPTY_PARTICULARS
   const inspectionItems = certificate.inspectionSchedule ?? []
-
   const earthingType = supply.earthingType
 
-  // Circuits for current board
   const boardCircuits = useMemo(
     () => {
       if (!activeBoard?.dbReference) return circuits
@@ -158,7 +295,6 @@ const initialCert: Partial<EICRCertificate> = {
     [circuits, activeBoard]
   )
 
-  // Observation counts
   const obsCounts = useMemo(() => {
     const counts: Record<ClassificationCode, number> = { C1: 0, C2: 0, C3: 0, FI: 0 }
     observations.forEach((o) => {
@@ -223,7 +359,10 @@ const initialCert: Partial<EICRCertificate> = {
             }
             existing.push(newCircuit)
           }
-          return { ...prev, circuits: existing, updatedAt: new Date().toISOString() }
+          const updated = { ...prev, circuits: existing, updatedAt: new Date().toISOString() }
+          // Persist async (fire-and-forget)
+          persistCertificate(updated)
+          return updated
         })
         trackCircuitCaptured(circuit.circuitType ?? 'UNKNOWN', 'voice')
         setShowCircuitRecorder(false)
@@ -232,7 +371,7 @@ const initialCert: Partial<EICRCertificate> = {
         captureError(error, 'InspectionCapture.handleCircuitConfirmed')
       }
     },
-    [editingCircuitIndex, activeBoard]
+    [editingCircuitIndex, activeBoard, persistCertificate]
   )
 
   // ============================================================
@@ -261,7 +400,9 @@ const initialCert: Partial<EICRCertificate> = {
             }
             existing.push(newObs)
           }
-          return { ...prev, observations: existing, updatedAt: new Date().toISOString() }
+          const updated = { ...prev, observations: existing, updatedAt: new Date().toISOString() }
+          persistCertificate(updated)
+          return updated
         })
         trackObservationCaptured(
           observation.classificationCode ?? 'C3',
@@ -273,7 +414,7 @@ const initialCert: Partial<EICRCertificate> = {
         captureError(error, 'InspectionCapture.handleObservationConfirmed')
       }
     },
-    [editingObsIndex, activeBoard]
+    [editingObsIndex, activeBoard, persistCertificate]
   )
 
   // ============================================================
@@ -281,20 +422,20 @@ const initialCert: Partial<EICRCertificate> = {
   // ============================================================
 
   const handleSupplyChange = useCallback((updated: SupplyCharacteristics) => {
-    setCertificate((prev) => ({
-      ...prev,
-      supplyCharacteristics: updated,
-      updatedAt: new Date().toISOString(),
-    }))
-  }, [])
+    setCertificate((prev) => {
+      const cert = { ...prev, supplyCharacteristics: updated, updatedAt: new Date().toISOString() }
+      persistCertificate(cert)
+      return cert
+    })
+  }, [persistCertificate])
 
   const handleParticularsChange = useCallback((updated: InstallationParticulars) => {
-    setCertificate((prev) => ({
-      ...prev,
-      installationParticulars: updated,
-      updatedAt: new Date().toISOString(),
-    }))
-  }, [])
+    setCertificate((prev) => {
+      const cert = { ...prev, installationParticulars: updated, updatedAt: new Date().toISOString() }
+      persistCertificate(cert)
+      return cert
+    })
+  }, [persistCertificate])
 
   // ============================================================
   // HANDLERS: CHECKLIST
@@ -311,13 +452,15 @@ const initialCert: Partial<EICRCertificate> = {
           }
           const completed = items.filter((i) => i.outcome !== null).length
           trackChecklistProgress(completed, items.length)
-          return { ...prev, inspectionSchedule: items, updatedAt: new Date().toISOString() }
+          const cert = { ...prev, inspectionSchedule: items, updatedAt: new Date().toISOString() }
+          persistCertificate(cert)
+          return cert
         })
       } catch (error) {
         captureError(error, 'InspectionCapture.handleItemChange')
       }
     },
-    []
+    [persistCertificate]
   )
 
   const handleBulkPass = useCallback((sectionNumber: number) => {
@@ -330,43 +473,41 @@ const initialCert: Partial<EICRCertificate> = {
           }
           return item
         })
-        return { ...prev, inspectionSchedule: updated, updatedAt: new Date().toISOString() }
+        const cert = { ...prev, inspectionSchedule: updated, updatedAt: new Date().toISOString() }
+        persistCertificate(cert)
+        return cert
       })
     } catch (error) {
       captureError(error, 'InspectionCapture.handleBulkPass')
     }
-  }, [])
+  }, [persistCertificate])
 
   // ============================================================
-  // HANDLERS: DB MANAGEMENT
+  // HANDLERS: BOARDS
   // ============================================================
 
   const handleAddBoard = useCallback(() => {
     setCertificate((prev) => {
       const existing = [...(prev.distributionBoards ?? [])]
       const newRef = `DB${existing.length + 1}`
-      existing.push({
-        dbReference: newRef,
-        dbLocation: '',
-      } as DistributionBoardHeader)
-      return { ...prev, distributionBoards: existing }
+      existing.push({ dbReference: newRef, dbLocation: '' } as DistributionBoardHeader)
+      const cert = { ...prev, distributionBoards: existing }
+      persistCertificate(cert)
+      return cert
     })
-  }, [])
+  }, [persistCertificate])
 
   // ============================================================
-  // HANDLERS: SAVE
+  // HANDLERS: MANUAL SAVE
   // ============================================================
 
   const handleSave = useCallback(() => {
     try {
-      // TODO: Save to API in Phase 6
-      const updatedCert = { ...certificate, updatedAt: new Date().toISOString() }
-      setCertificate(updatedCert)
-      // For now, show a simple confirmation
+      persistCertificate(certificate)
     } catch (error) {
       captureError(error, 'InspectionCapture.handleSave')
     }
-  }, [certificate])
+  }, [certificate, persistCertificate])
 
   // ============================================================
   // TAB CONFIG
@@ -378,6 +519,29 @@ const initialCert: Partial<EICRCertificate> = {
     { id: 'supply', label: 'Supply', icon: Settings2 },
     { id: 'checklist', label: 'Checklist', icon: ClipboardList },
   ]
+
+  // ============================================================
+  // RENDER: LOADING / ERROR
+  // ============================================================
+
+  if (pageState === 'loading') {
+    return (
+      <div className="max-w-lg mx-auto px-4 py-16 text-center">
+        <Loader2 className="w-8 h-8 text-certvoice-accent animate-spin mx-auto mb-3" />
+        <p className="text-sm text-certvoice-muted">Loading certificate...</p>
+      </div>
+    )
+  }
+
+  if (pageState === 'error') {
+    return (
+      <div className="max-w-lg mx-auto px-4 py-16 text-center space-y-3">
+        <AlertTriangle className="w-8 h-8 text-certvoice-red mx-auto" />
+        <p className="text-sm text-certvoice-red">{loadError ?? 'Something went wrong'}</p>
+        <Link to="/" className="cv-btn-secondary inline-block">Back to Dashboard</Link>
+      </div>
+    )
+  }
 
   // ============================================================
   // RENDER: CIRCUITS TAB
@@ -433,12 +597,12 @@ const initialCert: Partial<EICRCertificate> = {
       ) : (
         boardCircuits.map((circuit, idx) => {
           const globalIdx = circuits.findIndex(
-            (c) => c.circuitNumber === circuit.circuitNumber && c.dbId === circuit.dbId
+            (c) => c.id === circuit.id
           )
           const isPass = circuit.status === 'SATISFACTORY'
           return (
             <button
-              key={`${circuit.circuitNumber}-${idx}`}
+              key={circuit.id ?? `${circuit.circuitNumber}-${idx}`}
               type="button"
               onClick={() => {
                 setEditingCircuitIndex(globalIdx)
@@ -463,6 +627,12 @@ const initialCert: Partial<EICRCertificate> = {
                   {circuit.status ?? 'INCOMPLETE'}
                 </span>
               </div>
+              {circuit.zs !== null && circuit.zs !== undefined && (
+                <div className="text-[10px] text-certvoice-muted mt-1">
+                  Zs: {circuit.zs}Ω{circuit.r1r2 ? ` · R1+R2: ${circuit.r1r2}Ω` : ''}
+                  {circuit.rcdDisconnectionTime ? ` · RCD: ${circuit.rcdDisconnectionTime}ms` : ''}
+                </div>
+              )}
               {circuit.remarks && (
                 <div className="text-[10px] text-certvoice-muted mt-1">
                   {circuit.remarks}
@@ -509,28 +679,19 @@ const initialCert: Partial<EICRCertificate> = {
 
   const renderObservationsTab = () => (
     <div className="space-y-3">
-      {/* Summary badges */}
       {observations.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
           {obsCounts.C1 > 0 && (
-            <span className="cv-code-c1 text-xs px-2 py-1 rounded font-semibold">
-              C1: {obsCounts.C1}
-            </span>
+            <span className="cv-code-c1 text-xs px-2 py-1 rounded font-semibold">C1: {obsCounts.C1}</span>
           )}
           {obsCounts.C2 > 0 && (
-            <span className="cv-code-c2 text-xs px-2 py-1 rounded font-semibold">
-              C2: {obsCounts.C2}
-            </span>
+            <span className="cv-code-c2 text-xs px-2 py-1 rounded font-semibold">C2: {obsCounts.C2}</span>
           )}
           {obsCounts.C3 > 0 && (
-            <span className="cv-code-c3 text-xs px-2 py-1 rounded font-semibold">
-              C3: {obsCounts.C3}
-            </span>
+            <span className="cv-code-c3 text-xs px-2 py-1 rounded font-semibold">C3: {obsCounts.C3}</span>
           )}
           {obsCounts.FI > 0 && (
-            <span className="cv-code-fi text-xs px-2 py-1 rounded font-semibold">
-              FI: {obsCounts.FI}
-            </span>
+            <span className="cv-code-fi text-xs px-2 py-1 rounded font-semibold">FI: {obsCounts.FI}</span>
           )}
           {hasUnsatisfactory && (
             <span className="cv-badge-fail text-[10px] ml-auto">UNSATISFACTORY</span>
@@ -538,19 +699,16 @@ const initialCert: Partial<EICRCertificate> = {
         </div>
       )}
 
-      {/* Observation list */}
       {observations.length === 0 ? (
         <div className="cv-panel text-center py-8">
           <AlertTriangle className="w-6 h-6 text-certvoice-muted/40 mx-auto mb-2" />
           <p className="text-xs text-certvoice-muted">No observations recorded</p>
-          <p className="text-[10px] text-certvoice-muted/60 mt-1">
-            Voice-capture defects to add them
-          </p>
+          <p className="text-[10px] text-certvoice-muted/60 mt-1">Voice-capture defects to add them</p>
         </div>
       ) : (
         observations.map((obs, idx) => (
           <button
-            key={`obs-${obs.itemNumber}-${idx}`}
+            key={obs.id ?? `obs-${obs.itemNumber}-${idx}`}
             type="button"
             onClick={() => {
               setEditingObsIndex(idx)
@@ -561,25 +719,18 @@ const initialCert: Partial<EICRCertificate> = {
             <div className="flex items-start gap-2">
               <span
                 className={`text-[10px] font-bold px-2 py-0.5 rounded shrink-0 mt-0.5 ${
-                  obs.classificationCode === 'C1'
-                    ? 'cv-code-c1'
-                    : obs.classificationCode === 'C2'
-                      ? 'cv-code-c2'
-                      : obs.classificationCode === 'C3'
-                        ? 'cv-code-c3'
-                        : 'cv-code-fi'
+                  obs.classificationCode === 'C1' ? 'cv-code-c1'
+                    : obs.classificationCode === 'C2' ? 'cv-code-c2'
+                    : obs.classificationCode === 'C3' ? 'cv-code-c3'
+                    : 'cv-code-fi'
                 }`}
               >
                 {obs.classificationCode}
               </span>
               <div className="min-w-0 flex-1">
-                <div className="text-xs text-certvoice-text line-clamp-2">
-                  {obs.observationText ?? ''}
-                </div>
+                <div className="text-xs text-certvoice-text line-clamp-2">{obs.observationText ?? ''}</div>
                 {obs.regulationReference && (
-                  <div className="text-[10px] text-certvoice-muted mt-1 font-mono">
-                    {obs.regulationReference}
-                  </div>
+                  <div className="text-[10px] text-certvoice-muted mt-1 font-mono">{obs.regulationReference}</div>
                 )}
               </div>
             </div>
@@ -587,7 +738,6 @@ const initialCert: Partial<EICRCertificate> = {
         ))
       )}
 
-      {/* Add observation button */}
       <button
         type="button"
         onClick={() => {
@@ -600,7 +750,6 @@ const initialCert: Partial<EICRCertificate> = {
         Record Observation
       </button>
 
-      {/* Observation Recorder */}
       {showObservationRecorder && (
         <ObservationRecorder
           locationContext={activeBoard?.dbLocation ?? ''}
@@ -619,7 +768,7 @@ const initialCert: Partial<EICRCertificate> = {
   )
 
   // ============================================================
-  // RENDER: SUPPLY TAB
+  // RENDER: SUPPLY + CHECKLIST TABS
   // ============================================================
 
   const renderSupplyTab = () => (
@@ -630,10 +779,6 @@ const initialCert: Partial<EICRCertificate> = {
       onParticularsChange={handleParticularsChange}
     />
   )
-
-  // ============================================================
-  // RENDER: CHECKLIST TAB
-  // ============================================================
 
   const renderChecklistTab = () => (
     <InspectionChecklist
@@ -679,12 +824,16 @@ const initialCert: Partial<EICRCertificate> = {
               {address}
             </h1>
             <p className="text-[10px] text-certvoice-muted">
-              {certificate.reportNumber} ·{' '}
-              {certificate.installationDetails?.installationAddress
-                ? certificate.clientDetails?.clientName ?? ''
-                : ''}
+              {certificate.reportNumber ?? ''} ·{' '}
+              {certificate.clientDetails?.clientName ?? ''}
             </p>
           </div>
+          {syncServiceRef.current && (
+            <SyncIndicator
+              onStatusChange={syncServiceRef.current.onStatusChange}
+              onSyncNow={() => syncServiceRef.current?.syncNow()}
+            />
+          )}
           <button
             type="button"
             onClick={handleSave}
