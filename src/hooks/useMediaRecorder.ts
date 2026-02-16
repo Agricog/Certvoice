@@ -54,7 +54,7 @@ export interface UseMediaRecorderReturn {
 
 function isMediaRecorderSupported(): boolean {
   if (typeof window === 'undefined') return false
-  return !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder)
+  return !!(typeof navigator.mediaDevices?.getUserMedia === 'function' && typeof window.MediaRecorder === 'function')
 }
 
 /**
