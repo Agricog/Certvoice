@@ -88,6 +88,9 @@ STRIPE_PRICE_ID_BUSINESS = "price_1T1B1pRQz2FQGkPSiHxWlmuS"
 name = "certvoice-certificates-crud"
 main = "workers/certificates-crud.ts"
 
+[ai]
+   binding = "AI"
+
 [env.certificates-crud.vars]
 ALLOWED_ORIGIN = "https://certvoice.co.uk"
 
