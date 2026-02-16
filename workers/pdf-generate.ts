@@ -1500,6 +1500,226 @@ function renderCircuitSchedule(ctx: DrawContext, cert: EICRCertificate): void {
   }
 }
 
+// ============================================================
+// PHOTO EVIDENCE PAGES
+// ============================================================
+
+/**
+ * Photo layout constants.
+ * 2-column grid: each photo scaled to fit within a cell.
+ * Max 4 photos per observation (from PhotoCapture maxPhotos=4),
+ * so a 2×2 grid fits comfortably on one page section.
+ */
+const PHOTO_GRID = {
+  cols: 2,
+  cellWidth: Math.floor((CONTENT_WIDTH - 10) / 2),  // ~250
+  maxCellHeight: 180,
+  gap: 10,
+  captionHeight: 12,
+  obsHeaderHeight: 20,
+} as const
+
+/**
+ * Fetch a photo from R2 and embed it into the PDF at the given position,
+ * scaled to fit within maxWidth × maxHeight while preserving aspect ratio.
+ *
+ * @returns The actual drawn height, or 0 if the photo could not be embedded.
+ */
+async function embedPhoto(
+  ctx: DrawContext,
+  photoKey: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  maxHeight: number
+): Promise<number> {
+  try {
+    const object = await ctx.env.STORAGE_BUCKET.get(photoKey)
+    if (!object) return 0
+
+    const bytes = new Uint8Array(await object.arrayBuffer())
+    const contentType = object.httpMetadata?.contentType ?? ''
+
+    // Determine format — photos from PhotoCapture are JPEG (compressed),
+    // but handle PNG fallback for any edge cases
+    const isJpeg = contentType.includes('jpeg') || contentType.includes('jpg') ||
+                   photoKey.endsWith('.jpg') || photoKey.endsWith('.jpeg')
+
+    const image = isJpeg
+      ? await ctx.doc.embedJpg(bytes)
+      : await ctx.doc.embedPng(bytes)
+
+    // Scale to fit within the cell
+    const imgDims = image.scale(1)
+    const scaleX = maxWidth / imgDims.width
+    const scaleY = maxHeight / imgDims.height
+    const scale = Math.min(scaleX, scaleY, 1) // never upscale
+
+    const drawWidth = imgDims.width * scale
+    const drawHeight = imgDims.height * scale
+
+    // Draw light border around the photo area
+    drawRect(ctx.currentPage, x, y - drawHeight, drawWidth, drawHeight, undefined, COLOURS.lightGrey, 0.5)
+
+    ctx.currentPage.drawImage(image, {
+      x,
+      y: y - drawHeight,
+      width: drawWidth,
+      height: drawHeight,
+    })
+
+    return drawHeight
+  } catch {
+    // Failed to fetch or embed — draw a small placeholder
+    const placeholderH = 40
+    drawRect(ctx.currentPage, x, y - placeholderH, maxWidth * 0.6, placeholderH, COLOURS.rowAlt, COLOURS.lightGrey)
+    drawText(ctx.currentPage, 'Photo unavailable', x + 4, y - placeholderH + 14, ctx.font, FONT_SIZE.small, COLOURS.midGrey)
+    return placeholderH
+  }
+}
+
+/**
+ * Render photo evidence pages — one section per observation that has photos.
+ * Photos are laid out in a 2-column grid with observation reference headers.
+ * Only called when includePhotos option is true.
+ */
+async function renderPhotoPages(ctx: DrawContext, cert: EICRCertificate): Promise<void> {
+  // Filter to observations that actually have photos
+  const obsWithPhotos = cert.observations.filter((obs) => obs.photoKeys.length > 0)
+  if (obsWithPhotos.length === 0) return
+
+  createPage(ctx)
+  drawSectionHeader(ctx, 'Photo Evidence')
+  ctx.y -= 4
+
+  // Intro text
+  drawText(
+    ctx.currentPage,
+    `${obsWithPhotos.length} observation${obsWithPhotos.length === 1 ? '' : 's'} with photo evidence attached.`,
+    MARGIN.left + 4,
+    ctx.y,
+    ctx.font,
+    FONT_SIZE.body,
+    COLOURS.midGrey
+  )
+  ctx.y -= 16
+
+  for (const obs of obsWithPhotos) {
+    // Estimate space needed for this observation:
+    // header + one row of photos minimum
+    const rowsNeeded = Math.ceil(obs.photoKeys.length / PHOTO_GRID.cols)
+    const estimatedHeight = PHOTO_GRID.obsHeaderHeight +
+      (rowsNeeded * (PHOTO_GRID.maxCellHeight + PHOTO_GRID.captionHeight + PHOTO_GRID.gap))
+
+    // If it won't fit, start a new page
+    ensureSpace(ctx, Math.min(estimatedHeight, PHOTO_GRID.obsHeaderHeight + PHOTO_GRID.maxCellHeight + 40))
+
+    // Observation sub-header with colour-coded classification
+    const obsColour = codeColour(obs.classificationCode)
+    drawRect(ctx.currentPage, MARGIN.left, ctx.y - 16, CONTENT_WIDTH, 16, rgb(0.95, 0.95, 0.97))
+
+    // "Obs 1 — C2 — Kitchen" format
+    const headerParts = [
+      `Obs ${obs.itemNumber}`,
+      obs.classificationCode,
+      obs.location || obs.dbReference,
+    ].filter(Boolean)
+
+    drawText(
+      ctx.currentPage,
+      headerParts[0],
+      MARGIN.left + 4,
+      ctx.y - 12,
+      ctx.fontBold,
+      FONT_SIZE.body,
+      COLOURS.black
+    )
+    // Classification code in colour
+    const part0Width = textWidth(headerParts[0] + ' — ', ctx.fontBold, FONT_SIZE.body)
+    drawText(
+      ctx.currentPage,
+      `— ${headerParts[1]}`,
+      MARGIN.left + 4 + textWidth(headerParts[0] + ' ', ctx.fontBold, FONT_SIZE.body),
+      ctx.y - 12,
+      ctx.fontBold,
+      FONT_SIZE.body,
+      obsColour
+    )
+    // Location
+    if (headerParts[2]) {
+      drawText(
+        ctx.currentPage,
+        `— ${headerParts[2]}`,
+        MARGIN.left + 4 + part0Width + textWidth(headerParts[1] + ' ', ctx.fontBold, FONT_SIZE.body),
+        ctx.y - 12,
+        ctx.font,
+        FONT_SIZE.body,
+        COLOURS.darkGrey,
+        CONTENT_WIDTH - part0Width - 80
+      )
+    }
+    ctx.y -= PHOTO_GRID.obsHeaderHeight
+
+    // Observation text (truncated summary)
+    const obsTextTruncated = obs.observationText.length > 120
+      ? obs.observationText.substring(0, 117) + '…'
+      : obs.observationText
+    ctx.y = drawWrappedText(
+      ctx.currentPage,
+      obsTextTruncated,
+      MARGIN.left + 4,
+      ctx.y,
+      ctx.font,
+      FONT_SIZE.small,
+      CONTENT_WIDTH - 8,
+      10,
+      COLOURS.darkGrey
+    )
+    ctx.y -= 8
+
+    // Lay out photos in 2-column grid
+    for (let i = 0; i < obs.photoKeys.length; i += PHOTO_GRID.cols) {
+      // Check if a new row of photos fits
+      ensureSpace(ctx, PHOTO_GRID.maxCellHeight + PHOTO_GRID.captionHeight + PHOTO_GRID.gap)
+
+      const rowKeys = obs.photoKeys.slice(i, i + PHOTO_GRID.cols)
+      let maxRowHeight = 0
+
+      // Embed each photo in the row
+      for (let col = 0; col < rowKeys.length; col++) {
+        const cellX = MARGIN.left + col * (PHOTO_GRID.cellWidth + PHOTO_GRID.gap)
+        const drawnHeight = await embedPhoto(
+          ctx,
+          rowKeys[col],
+          cellX,
+          ctx.y,
+          PHOTO_GRID.cellWidth,
+          PHOTO_GRID.maxCellHeight
+        )
+        maxRowHeight = Math.max(maxRowHeight, drawnHeight)
+
+        // Photo label beneath
+        drawText(
+          ctx.currentPage,
+          `Photo ${i + col + 1} of ${obs.photoKeys.length}`,
+          cellX,
+          ctx.y - maxRowHeight - 10,
+          ctx.font,
+          FONT_SIZE.tiny,
+          COLOURS.midGrey
+        )
+      }
+
+      ctx.y -= maxRowHeight + PHOTO_GRID.captionHeight + PHOTO_GRID.gap
+    }
+
+    // Separator line between observations
+    ctx.y -= 4
+    drawLine(ctx.currentPage, MARGIN.left, ctx.y, MARGIN.left + CONTENT_WIDTH, ctx.y, COLOURS.lightGrey, 0.5)
+    ctx.y -= 10
+  }
+}
+
 function renderGuidancePage(ctx: DrawContext): void {
   createPage(ctx)
   drawSectionHeader(ctx, 'Guidance for Recipients')
@@ -1536,7 +1756,7 @@ function renderGuidancePage(ctx: DrawContext): void {
 // MAIN GENERATION FUNCTION
 // ============================================================
 
-async function generatePDF(cert: EICRCertificate, env: Env): Promise<Uint8Array> {
+async function generatePDF(cert: EICRCertificate, env: Env, options?: Partial<GenerateOptions>): Promise<Uint8Array> {
   const doc = await PDFDocument.create()
 
   doc.setTitle(`EICR ${cert.reportNumber}`)
@@ -1568,6 +1788,9 @@ async function generatePDF(cert: EICRCertificate, env: Env): Promise<Uint8Array>
   await renderSummaryPage(ctx, cert)
   renderSupplyPage(ctx, cert)
   renderObservationsPage(ctx, cert)
+  if (options?.includePhotos) {
+    await renderPhotoPages(ctx, cert)
+  }
   renderInspectionSchedule(ctx, cert)
   renderCircuitSchedule(ctx, cert)
   renderGuidancePage(ctx)
@@ -1727,7 +1950,7 @@ export default {
 
     // Generate PDF
     try {
-      const pdfBytes = await generatePDF(body.certificate, env)
+      const pdfBytes = await generatePDF(body.certificate, env, body.options)
       const outputFormat = body.options?.outputFormat ?? 'buffer'
 
       if (outputFormat === 'r2') {
