@@ -1,13 +1,18 @@
 /**
  * CertVoice — R2 Upload Cloudflare Worker
  *
- * Secure file upload/download via Cloudflare R2 with signed URLs.
+ * Secure file upload/download via Cloudflare R2.
  * All files scoped by engineer_id for data isolation.
  *
  * Endpoints:
- *   POST /api/upload-url   — Generate signed upload URL
- *   POST /api/download-url — Generate signed download URL
- *   DELETE /api/file        — Delete a file from R2
+ *   POST   /api/upload-url        — Generate upload key + validate metadata
+ *   PUT    /api/upload/:key       — Upload binary file to R2
+ *   POST   /api/download-url      — Download/serve file from R2
+ *   DELETE /api/file              — Delete a file from R2
+ *
+ * Upload flow (two-step):
+ *   1. POST /api/upload-url  → { key, uploadEndpoint, maxSize, contentType }
+ *   2. PUT  /api/upload/:key → binary body with Content-Type header
  *
  * File Types:
  *   - photo:     JPEG/PNG, max 5MB (inspection evidence photos)
@@ -18,7 +23,8 @@
  *   - Upstash rate limiting (30 uploads/hour per engineer)
  *   - Engineer-scoped file paths (engineer cannot access another's files)
  *   - CORS locked to ALLOWED_ORIGIN
- *   - Content-type validation server-side
+ *   - Content-type validation server-side on both steps
+ *   - File size validation server-side
  *   - Filename sanitisation
  *
  * Guard: requestId, structured logs, safety switches per Build Standard v3.
@@ -88,8 +94,8 @@ const FILE_CONSTRAINTS = {
     maxSize: 5 * 1024 * 1024, // 5MB
     allowedTypes: ['image/jpeg', 'image/png'] as string[],
     allowedExtensions: ['.jpg', '.jpeg', '.png'] as string[],
-    uploadExpiry: 300, // 5 minutes
-    downloadExpiry: 3600, // 1 hour
+    uploadExpiry: 300,
+    downloadExpiry: 3600,
   },
   signature: {
     maxSize: 2 * 1024 * 1024, // 2MB
@@ -99,6 +105,12 @@ const FILE_CONSTRAINTS = {
     downloadExpiry: 3600,
   },
 } as const
+
+// Union of all allowed MIME types for binary upload validation
+const ALL_ALLOWED_TYPES = ['image/jpeg', 'image/png']
+
+// Max file size across all types
+const MAX_FILE_SIZE = 5 * 1024 * 1024
 
 // ============================================================
 // GUARD HELPERS
@@ -119,7 +131,7 @@ function structuredLog(log: StructuredLog): void {
 }
 
 // ============================================================
-// AUTH — Clerk JWT verification (matches claude-proxy pattern)
+// AUTH — Clerk JWT verification
 // ============================================================
 
 async function verifyClerkJWT(
@@ -182,7 +194,7 @@ async function verifyClerkJWT(
 }
 
 // ============================================================
-// RATE LIMITING (Upstash — consistent with other workers)
+// RATE LIMITING
 // ============================================================
 
 function createRateLimiter(env: Env): Ratelimit {
@@ -239,10 +251,23 @@ function sanitiseFilename(filename: string): string {
     .substring(0, 100)
 }
 
+function extractUploadKey(pathname: string): string | null {
+  const prefix = '/api/upload/'
+  if (!pathname.startsWith(prefix)) return null
+  const encoded = pathname.slice(prefix.length)
+  if (!encoded) return null
+  try {
+    return decodeURIComponent(encoded)
+  } catch {
+    return null
+  }
+}
+
 // ============================================================
 // ROUTE HANDLERS
 // ============================================================
 
+/** POST /api/upload-url — Step 1: Validate metadata + generate R2 key */
 async function handleUploadUrl(
   body: UploadUrlRequest,
   engineerId: string,
@@ -250,21 +275,18 @@ async function handleUploadUrl(
 ): Promise<Response> {
   const { filename, contentType, fileType, certificateId } = body
 
-  // Validate file type category
   if (!fileType || !(fileType in FILE_CONSTRAINTS)) {
     return jsonResponse({ error: 'Invalid file type. Must be "photo" or "signature".' }, 400, cors)
   }
 
   const constraints = FILE_CONSTRAINTS[fileType]
 
-  // Validate content type
   if (!constraints.allowedTypes.includes(contentType)) {
     return jsonResponse({
       error: `Content type not allowed. Accepted: ${constraints.allowedTypes.join(', ')}`,
     }, 400, cors)
   }
 
-  // Validate filename
   if (!filename || filename.length > 200) {
     return jsonResponse({ error: 'Invalid filename' }, 400, cors)
   }
@@ -276,10 +298,7 @@ async function handleUploadUrl(
     }, 400, cors)
   }
 
-  // Sanitise filename
   const sanitised = sanitiseFilename(filename)
-
-  // Build R2 key scoped by engineer
   const timestamp = Date.now()
   const certPath = certificateId ? `/${certificateId}` : ''
   const key = `${engineerId}/${fileType}s${certPath}/${timestamp}-${sanitised}`
@@ -293,6 +312,53 @@ async function handleUploadUrl(
   }, 200, cors)
 }
 
+/** PUT /api/upload/:key — Step 2: Receive binary and store in R2 */
+async function handleUploadBinary(
+  key: string,
+  request: Request,
+  env: Env,
+  engineerId: string,
+  cors: Record<string, string>,
+  requestId: string
+): Promise<Response> {
+  // Security: key must start with this engineer's ID
+  if (!key.startsWith(`${engineerId}/`)) {
+    return jsonResponse({ error: 'Access denied', requestId }, 403, cors)
+  }
+
+  // Validate Content-Type
+  const contentType = (request.headers.get('Content-Type') ?? '').split(';')[0].trim()
+  if (!ALL_ALLOWED_TYPES.includes(contentType)) {
+    return jsonResponse({ error: `Content type not allowed: ${contentType}`, requestId }, 400, cors)
+  }
+
+  // Read body
+  const body = await request.arrayBuffer()
+
+  if (body.byteLength === 0) {
+    return jsonResponse({ error: 'Empty file', requestId }, 400, cors)
+  }
+
+  if (body.byteLength > MAX_FILE_SIZE) {
+    return jsonResponse({
+      error: `File too large (${Math.round(body.byteLength / 1024 / 1024)}MB). Max: ${MAX_FILE_SIZE / 1024 / 1024}MB`,
+      requestId,
+    }, 400, cors)
+  }
+
+  // Store in R2
+  await env.BUCKET.put(key, body, {
+    httpMetadata: { contentType },
+    customMetadata: {
+      engineerId,
+      uploadedAt: new Date().toISOString(),
+    },
+  })
+
+  return jsonResponse({ key, size: body.byteLength, contentType, requestId }, 201, cors)
+}
+
+/** POST /api/download-url — Serve file from R2 */
 async function handleDownloadUrl(
   body: DownloadUrlRequest,
   env: Env,
@@ -305,29 +371,24 @@ async function handleDownloadUrl(
     return jsonResponse({ error: 'Missing file key' }, 400, cors)
   }
 
-  // Security: verify key belongs to requesting engineer
   if (!key.startsWith(`${engineerId}/`)) {
     return jsonResponse({ error: 'Forbidden' }, 403, cors)
   }
 
-  // Check file exists
   const object = await env.BUCKET.get(key)
   if (!object) {
     return jsonResponse({ error: 'File not found' }, 404, cors)
   }
 
-  // Return the file directly with appropriate headers
   const headers = new Headers()
   headers.set('Content-Type', object.httpMetadata?.contentType ?? 'application/octet-stream')
   headers.set('Content-Length', String(object.size))
   headers.set('Cache-Control', 'private, max-age=3600')
 
-  // Extract filename from key
   const parts = key.split('/')
   const filename = parts[parts.length - 1] ?? 'download'
   headers.set('Content-Disposition', `inline; filename="${filename}"`)
 
-  // Add CORS headers
   for (const [k, v] of Object.entries(cors)) {
     headers.set(k, v)
   }
@@ -335,6 +396,7 @@ async function handleDownloadUrl(
   return new Response(object.body, { headers })
 }
 
+/** DELETE /api/file — Remove file from R2 */
 async function handleDeleteFile(
   body: DeleteFileRequest,
   env: Env,
@@ -347,7 +409,6 @@ async function handleDeleteFile(
     return jsonResponse({ error: 'Missing file key' }, 400, cors)
   }
 
-  // Security: verify key belongs to requesting engineer
   if (!key.startsWith(`${engineerId}/`)) {
     return jsonResponse({ error: 'Forbidden' }, 403, cors)
   }
@@ -376,9 +437,12 @@ export default {
       return corsResponse(origin, env.ALLOWED_ORIGIN)
     }
 
-    // READ_ONLY_MODE safety switch (blocks uploads and deletes, allows downloads)
-    const isWriteOp = request.method === 'POST' && url.pathname === '/api/upload-url' ||
-                      request.method === 'DELETE'
+    // READ_ONLY_MODE safety switch
+    const isWriteOp =
+      (request.method === 'POST' && url.pathname === '/api/upload-url') ||
+      (request.method === 'PUT' && url.pathname.startsWith('/api/upload/')) ||
+      request.method === 'DELETE'
+
     if (env.READ_ONLY_MODE === 'true' && isWriteOp) {
       status = 503
       structuredLog({
@@ -392,12 +456,8 @@ export default {
       )
     }
 
-    // Authenticate via Clerk JWT
-    userId = await verifyClerkJWT(
-      request.headers.get('Authorization'),
-      env.CLERK_JWKS_URL
-    )
-
+    // Authenticate
+    userId = await verifyClerkJWT(request.headers.get('Authorization'), env.CLERK_JWKS_URL)
     if (!userId) {
       status = 401
       structuredLog({
@@ -431,7 +491,7 @@ export default {
     }
 
     try {
-      // Route: Upload URL
+      // Route: Step 1 — Generate upload key
       if (url.pathname === '/api/upload-url' && request.method === 'POST') {
         const body = (await request.json()) as UploadUrlRequest
         const response = await handleUploadUrl(body, userId, cors)
@@ -444,7 +504,23 @@ export default {
         return response
       }
 
-      // Route: Download URL
+      // Route: Step 2 — Receive binary upload
+      if (url.pathname.startsWith('/api/upload/') && request.method === 'PUT') {
+        const key = extractUploadKey(url.pathname)
+        if (!key) {
+          return jsonResponse({ error: 'Invalid upload key', requestId }, 400, cors)
+        }
+        const response = await handleUploadBinary(key, request, env, userId, cors, requestId)
+        status = response.status
+        structuredLog({
+          requestId, route: url.pathname, method: request.method,
+          status, latencyMs: Date.now() - startTime, userId,
+          message: status === 201 ? `File uploaded: ${key}` : 'Upload failed',
+        })
+        return response
+      }
+
+      // Route: Download file
       if (url.pathname === '/api/download-url' && request.method === 'POST') {
         const body = (await request.json()) as DownloadUrlRequest
         const response = await handleDownloadUrl(body, env, userId, cors)
