@@ -27,6 +27,8 @@ import {
   Plus,
   Save,
   Loader2,
+  Mic,
+  Pencil,
 } from 'lucide-react'
 import type {
   EICRCertificate,
@@ -56,6 +58,7 @@ import { createSyncService } from '../services/syncService'
 
 type CaptureTab = 'circuits' | 'observations' | 'supply' | 'checklist'
 type PageState = 'loading' | 'ready' | 'error'
+type RecorderMode = 'voice' | 'manual' | null
 
 // ============================================================
 // DEFAULTS
@@ -124,7 +127,7 @@ export default function InspectionCapture() {
   const [certificate, setCertificate] = useState<Partial<EICRCertificate>>({})
   const [activeTab, setActiveTab] = useState<CaptureTab>('circuits')
   const [activeDbIndex, setActiveDbIndex] = useState(0)
-  const [showCircuitRecorder, setShowCircuitRecorder] = useState(false)
+  const [recorderMode, setRecorderMode] = useState<RecorderMode>(null)
   const [showObservationRecorder, setShowObservationRecorder] = useState(false)
   const [editingCircuitIndex, setEditingCircuitIndex] = useState<number | null>(null)
   const [editingObsIndex, setEditingObsIndex] = useState<number | null>(null)
@@ -313,6 +316,8 @@ export default function InspectionCapture() {
   const handleCircuitConfirmed = useCallback(
     (circuit: Partial<CircuitDetail>) => {
       try {
+        const captureMethod = recorderMode ?? 'voice'
+
         setCertificate((prev) => {
           const existing = [...(prev.circuits ?? [])]
           if (editingCircuitIndex !== null) {
@@ -363,14 +368,14 @@ export default function InspectionCapture() {
           persistCertificate(updated)
           return updated
         })
-        trackCircuitCaptured(circuit.circuitType ?? 'UNKNOWN', 'voice')
-        setShowCircuitRecorder(false)
+        trackCircuitCaptured(circuit.circuitType ?? 'UNKNOWN', captureMethod)
+        setRecorderMode(null)
         setEditingCircuitIndex(null)
       } catch (error) {
         captureError(error, 'InspectionCapture.handleCircuitConfirmed')
       }
     },
-    [editingCircuitIndex, activeBoard, persistCertificate]
+    [editingCircuitIndex, activeBoard, persistCertificate, recorderMode]
   )
 
   // ============================================================
@@ -590,7 +595,7 @@ export default function InspectionCapture() {
           <CircuitBoard className="w-6 h-6 text-certvoice-muted/40 mx-auto mb-2" />
           <p className="text-xs text-certvoice-muted">No circuits captured yet</p>
           <p className="text-[10px] text-certvoice-muted/60 mt-1">
-            Tap + to record test results by voice
+            Record by voice or type values manually
           </p>
         </div>
       ) : (
@@ -605,7 +610,7 @@ export default function InspectionCapture() {
               type="button"
               onClick={() => {
                 setEditingCircuitIndex(globalIdx)
-                setShowCircuitRecorder(true)
+                setRecorderMode('manual')
               }}
               className="cv-panel w-full text-left p-3 hover:border-certvoice-accent/50 transition-colors"
             >
@@ -642,29 +647,45 @@ export default function InspectionCapture() {
         })
       )}
 
-      {/* Add circuit button */}
-      <button
-        type="button"
-        onClick={() => {
-          setEditingCircuitIndex(null)
-          setShowCircuitRecorder(true)
-        }}
-        className="cv-btn-primary w-full flex items-center justify-center gap-2"
-      >
-        <Plus className="w-4 h-4" />
-        Record Circuit
-      </button>
+      {/* Add circuit buttons — voice + manual */}
+      <div className="flex gap-3">
+        <button
+          type="button"
+          onClick={() => {
+            setEditingCircuitIndex(null)
+            setRecorderMode('voice')
+          }}
+          className="cv-btn-primary flex-1 flex items-center justify-center gap-2"
+        >
+          <Mic className="w-4 h-4" />
+          Record Circuit
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setEditingCircuitIndex(null)
+            setRecorderMode('manual')
+          }}
+          className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold
+                     bg-certvoice-surface-2 border border-certvoice-border text-certvoice-text
+                     hover:border-certvoice-accent hover:text-certvoice-accent transition-colors"
+        >
+          <Pencil className="w-4 h-4" />
+          Manual Entry
+        </button>
+      </div>
 
-      {/* Circuit Recorder */}
-      {showCircuitRecorder && (
+      {/* Circuit Recorder — voice or manual mode */}
+      {recorderMode && (
         <CircuitRecorder
+          mode={recorderMode}
           locationContext={activeBoard?.dbLocation ?? ''}
           dbContext={activeBoard?.dbReference ?? 'DB1'}
           existingCircuits={boardCircuits.map((c) => c.circuitNumber ?? '')}
           earthingType={earthingType}
           onCircuitConfirmed={handleCircuitConfirmed}
           onCancel={() => {
-            setShowCircuitRecorder(false)
+            setRecorderMode(null)
             setEditingCircuitIndex(null)
           }}
         />
