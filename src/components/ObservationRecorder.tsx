@@ -7,7 +7,8 @@
  *   1. Inspector taps mic, describes the defect
  *   2. AI extracts: description, classification code, regulation, remedial action
  *   3. Inspector reviews and confirms classification
- *   4. Observation added to Section K
+ *   4. PhotoCapture allows evidence photos during review
+ *   5. Observation added to Section K with photo keys
  *
  * Classification codes determine the overall report assessment:
  *   C1 or C2 → UNSATISFACTORY
@@ -19,13 +20,13 @@ import { useState, useCallback } from 'react'
 import {
   Check,
   X,
-  Camera,
   RotateCcw,
   AlertTriangle,
   Shield,
   BookOpen,
 } from 'lucide-react'
 import VoiceCapture from './VoiceCapture'
+import PhotoCapture from './PhotoCapture'
 import { useAIExtraction } from '../hooks/useAIExtraction'
 import type { ExtractionContext } from '../hooks/useAIExtraction'
 import type { Observation, ClassificationCode } from '../types/eicr'
@@ -38,6 +39,8 @@ import { trackObservationCaptured } from '../utils/analytics'
 // ============================================================
 
 interface ObservationRecorderProps {
+  /** UUID of the certificate — required for R2 storage path scoping */
+  certificateId: string
   /** Current location from room selector */
   locationContext: string
   /** Current distribution board reference */
@@ -48,6 +51,8 @@ interface ObservationRecorderProps {
   earthingType: string | null
   /** Existing circuit numbers (passed to AI context) */
   existingCircuits: string[]
+  /** Existing observation when editing (loads saved photoKeys, text, etc.) */
+  editingObservation?: Partial<Observation> | null
   /** Called when inspector confirms an observation */
   onObservationConfirmed: (observation: Partial<Observation>) => void
   /** Called when recorder is cancelled */
@@ -105,18 +110,30 @@ function ClassificationBadge({
 // ============================================================
 
 export default function ObservationRecorder({
+  certificateId,
   locationContext,
   dbContext,
   nextItemNumber,
   earthingType,
   existingCircuits,
+  editingObservation,
   onObservationConfirmed,
   onCancel,
 }: ObservationRecorderProps) {
-  const [step, setStep] = useState<RecorderStep>('capture')
-  const [extractedObs, setExtractedObs] = useState<Partial<Observation> | null>(null)
+  // If editing, jump straight to review with existing data
+  const isEditing = Boolean(editingObservation)
+
+  const [step, setStep] = useState<RecorderStep>(isEditing ? 'review' : 'capture')
+  const [extractedObs, setExtractedObs] = useState<Partial<Observation> | null>(
+    isEditing ? (editingObservation ?? null) : null
+  )
   const [warnings, setWarnings] = useState<string[]>([])
-  const [selectedCode, setSelectedCode] = useState<ClassificationCode | null>(null)
+  const [selectedCode, setSelectedCode] = useState<ClassificationCode | null>(
+    isEditing ? (editingObservation?.classificationCode ?? null) : null
+  )
+  const [photoKeys, setPhotoKeys] = useState<string[]>(
+    editingObservation?.photoKeys ?? []
+  )
 
   const {
     status: extractionStatus,
@@ -153,6 +170,11 @@ export default function ObservationRecorder({
     [extract, context, nextItemNumber, locationContext]
   )
 
+  // --- Handle photo keys change ---
+  const handlePhotosChange = useCallback((keys: string[]) => {
+    setPhotoKeys(keys)
+  }, [])
+
   // --- Change classification code ---
   const handleCodeChange = useCallback((code: ClassificationCode) => {
     setSelectedCode(code)
@@ -169,13 +191,14 @@ export default function ObservationRecorder({
     const finalObs: Partial<Observation> = {
       ...extractedObs,
       classificationCode: selectedCode,
+      photoKeys,
     }
 
     onObservationConfirmed(finalObs)
     setStep('confirmed')
 
-    trackObservationCaptured(selectedCode, false)
-  }, [extractedObs, selectedCode, onObservationConfirmed])
+    trackObservationCaptured(selectedCode, photoKeys.length > 0)
+  }, [extractedObs, selectedCode, photoKeys, onObservationConfirmed])
 
   // --- Retry ---
   const handleRetry = useCallback(() => {
@@ -183,6 +206,7 @@ export default function ObservationRecorder({
     setExtractedObs(null)
     setSelectedCode(null)
     setWarnings([])
+    setPhotoKeys([])
     resetExtraction()
   }, [resetExtraction])
 
@@ -250,6 +274,11 @@ export default function ObservationRecorder({
           Observation #{nextItemNumber} added
         </p>
         {selectedCode && <ClassificationBadge code={selectedCode} />}
+        {photoKeys.length > 0 && (
+          <p className="text-[10px] text-certvoice-muted">
+            {photoKeys.length} photo{photoKeys.length !== 1 ? 's' : ''} attached
+          </p>
+        )}
       </div>
     )
   }
@@ -266,7 +295,9 @@ export default function ObservationRecorder({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Shield className="w-4 h-4 text-certvoice-amber" />
-          <h3 className="cv-section-title">Review Observation #{nextItemNumber}</h3>
+          <h3 className="cv-section-title">
+            {isEditing ? 'Edit' : 'Review'} Observation #{extractedObs.itemNumber ?? nextItemNumber}
+          </h3>
         </div>
       </div>
 
@@ -374,16 +405,13 @@ export default function ObservationRecorder({
         </div>
       )}
 
-      {/* Photo Evidence Placeholder */}
-      <button
-        className="w-full flex items-center justify-center gap-2 py-3 rounded-lg border
-                   border-dashed border-certvoice-border text-certvoice-muted text-xs
-                   hover:border-certvoice-accent hover:text-certvoice-accent transition-colors"
-        type="button"
-      >
-        <Camera className="w-4 h-4" />
-        Add Photo Evidence
-      </button>
+      {/* Photo Evidence — replaces placeholder */}
+      <PhotoCapture
+        certificateId={certificateId}
+        photoKeys={photoKeys}
+        onPhotosChange={handlePhotosChange}
+        maxPhotos={4}
+      />
 
       {/* Action Buttons */}
       <div className="flex gap-2">
@@ -395,15 +423,17 @@ export default function ObservationRecorder({
           type="button"
         >
           <Check className="w-4 h-4" />
-          Confirm Observation
+          {isEditing ? 'Update' : 'Confirm'} Observation
         </button>
-        <button
-          onClick={handleRetry}
-          className="cv-btn-secondary flex items-center justify-center gap-2 px-4"
-          type="button"
-        >
-          <RotateCcw className="w-4 h-4" />
-        </button>
+        {!isEditing && (
+          <button
+            onClick={handleRetry}
+            className="cv-btn-secondary flex items-center justify-center gap-2 px-4"
+            type="button"
+          >
+            <RotateCcw className="w-4 h-4" />
+          </button>
+        )}
         <button
           onClick={onCancel}
           className="cv-btn-secondary flex items-center justify-center gap-2 px-4"
