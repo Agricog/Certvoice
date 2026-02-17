@@ -5,6 +5,11 @@
  *   - 'voice': Record audio → transcribe → AI extract → review grid
  *   - 'manual': Jump straight to review grid for typed entry
  *
+ * Confidence UX:
+ *   - AI-extracted fields show amber highlight when confidence < 0.7
+ *   - "Low confidence — verify this value" hint on amber fields
+ *   - Voice transcript stored for evidence trail
+ *
  * Props match what InspectionCapture already passes.
  * All form values map to CircuitDetail via mapFormToCircuitDetail().
  *
@@ -105,6 +110,9 @@ const EMPTY_FORM: CircuitFormData = {
   spd_fitted: false,
   comments: '',
 }
+
+/** Fields below this confidence score get amber highlighting */
+const CONFIDENCE_THRESHOLD = 0.7
 
 /** BS 7671 Appendix 6 Column 3 codes */
 const WIRING_TYPES: { code: WiringTypeCode; label: string }[] = [
@@ -220,6 +228,7 @@ function TextField({
   suffix,
   warning,
   inputMode,
+  lowConfidence,
 }: {
   label: string
   value: string
@@ -228,6 +237,7 @@ function TextField({
   suffix?: string
   warning?: string
   inputMode?: 'text' | 'numeric' | 'decimal'
+  lowConfidence?: boolean
 }) {
   return (
     <div>
@@ -240,7 +250,11 @@ function TextField({
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
           className={`w-full bg-slate-800 border rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-            warning ? 'border-amber-500' : 'border-slate-600'
+            warning
+              ? 'border-amber-500'
+              : lowConfidence
+              ? 'border-amber-500/50 bg-amber-950/20'
+              : 'border-slate-600'
           } ${suffix ? 'pr-10' : ''}`}
         />
         {suffix && (
@@ -255,6 +269,12 @@ function TextField({
           {warning}
         </div>
       )}
+      {!warning && lowConfidence && (
+        <div className="flex items-center gap-1 mt-1 text-xs text-amber-400/70">
+          <AlertTriangle size={10} />
+          Low confidence — verify this value
+        </div>
+      )}
     </div>
   )
 }
@@ -265,12 +285,14 @@ function SelectField<T extends string>({
   onChange,
   options,
   placeholder,
+  lowConfidence,
 }: {
   label: string
   value: T | ''
   onChange: (v: T | '') => void
   options: { value: T; label: string }[]
   placeholder?: string
+  lowConfidence?: boolean
 }) {
   return (
     <div>
@@ -278,7 +300,9 @@ function SelectField<T extends string>({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as T | '')}
-        className="w-full bg-slate-800 border border-slate-600 rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className={`w-full bg-slate-800 border rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+          lowConfidence ? 'border-amber-500/50 bg-amber-950/20' : 'border-slate-600'
+        }`}
       >
         <option value="">{placeholder || 'Select...'}</option>
         {options.map((opt) => (
@@ -287,6 +311,12 @@ function SelectField<T extends string>({
           </option>
         ))}
       </select>
+      {lowConfidence && (
+        <div className="flex items-center gap-1 mt-1 text-xs text-amber-400/70">
+          <AlertTriangle size={10} />
+          Low confidence — verify this value
+        </div>
+      )}
     </div>
   )
 }
@@ -378,6 +408,10 @@ export default function CircuitRecorder({
   const [error, setError] = useState<string | null>(null)
   const maxZsManualRef = useRef(false) // tracks if user manually edited max_zs
 
+  // Voice transcript + AI confidence state
+  const [voiceTranscript, setVoiceTranscript] = useState<string | null>(null)
+  const [fieldConfidence, setFieldConfidence] = useState<Record<string, number> | null>(null)
+
   // Voice recording state
   const [isRecording, setIsRecording] = useState(false)
   const [audioLevel, setAudioLevel] = useState(0)
@@ -385,6 +419,16 @@ export default function CircuitRecorder({
   const audioChunksRef = useRef<Blob[]>([])
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animFrameRef = useRef<number | null>(null)
+
+  /** Check if a field has low AI confidence (below threshold) */
+  const isLowConfidence = useCallback(
+    (fieldKey: string): boolean => {
+      if (!fieldConfidence) return false
+      const score = fieldConfidence[fieldKey]
+      return score !== undefined && score < CONFIDENCE_THRESHOLD
+    },
+    [fieldConfidence]
+  )
 
   // ── Voice recording ───────────────────────────────────────────────────────
 
@@ -496,8 +540,11 @@ export default function CircuitRecorder({
       const data = await res.json()
       if (data.success && data.circuit) {
         setFormData((prev) => ({ ...prev, ...data.circuit }))
+        if (data.fieldConfidence) setFieldConfidence(data.fieldConfidence)
       }
 
+      // Store transcript for evidence trail
+      setVoiceTranscript(transcript)
       setStep('review')
     } catch {
       // If extraction fails, still show review grid with transcript in comments
@@ -505,6 +552,7 @@ export default function CircuitRecorder({
         ...prev,
         comments: `[Voice transcript] ${transcript}`,
       }))
+      setVoiceTranscript(transcript)
       setStep('review')
     }
   }
@@ -539,7 +587,11 @@ export default function CircuitRecorder({
 
     try {
       const mapped = mapFormToCircuitDetail(sanitized)
-      onCircuitConfirmed(mapped)
+      onCircuitConfirmed({
+        ...mapped,
+        voiceTranscript: voiceTranscript ?? undefined,
+        fieldConfidence: fieldConfidence ?? undefined,
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save circuit')
     } finally {
@@ -695,6 +747,14 @@ export default function CircuitRecorder({
         </div>
       )}
 
+      {/* Confidence banner — shows when voice-extracted with low overall confidence */}
+      {voiceTranscript && fieldConfidence && Object.values(fieldConfidence).some((v) => v < CONFIDENCE_THRESHOLD) && (
+        <div className="mx-4 mt-3 p-3 bg-amber-900/20 border border-amber-600/40 rounded-md text-amber-300/80 text-xs flex items-center gap-2">
+          <AlertTriangle size={14} />
+          Some fields have low AI confidence (amber highlighted). Please verify before confirming.
+        </div>
+      )}
+
       {/* Form sections */}
       <div className="p-4 pb-24">
         {/* ── Circuit Identity ────────────────────────────────────────────── */}
@@ -705,12 +765,14 @@ export default function CircuitRecorder({
               value={formData.circuit_number}
               onChange={(v) => updateField('circuit_number', v)}
               placeholder="e.g. 1"
+              lowConfidence={isLowConfidence('circuit_number')}
             />
             <TextField
               label="No. of Points"
               value={formData.number_of_points}
               onChange={(v) => updateField('number_of_points', v)}
               inputMode="numeric"
+              lowConfidence={isLowConfidence('number_of_points')}
             />
           </div>
           <TextField
@@ -718,6 +780,7 @@ export default function CircuitRecorder({
             value={formData.description}
             onChange={(v) => updateField('description', v)}
             placeholder="e.g. Ring final — ground floor sockets"
+            lowConfidence={isLowConfidence('description')}
           />
           <div className="grid grid-cols-2 gap-3">
             <SelectField
@@ -725,12 +788,14 @@ export default function CircuitRecorder({
               value={formData.type_of_wiring}
               onChange={(v) => updateField('type_of_wiring', v as WiringTypeCode | '')}
               options={WIRING_TYPES.map((w) => ({ value: w.code, label: w.label }))}
+              lowConfidence={isLowConfidence('type_of_wiring')}
             />
             <SelectField
               label="Ref. Method"
               value={formData.reference_method}
               onChange={(v) => updateField('reference_method', v as ReferenceMethod | '')}
               options={REFERENCE_METHODS.map((m) => ({ value: m, label: m }))}
+              lowConfidence={isLowConfidence('reference_method')}
             />
           </div>
         </FormSection>
@@ -742,6 +807,7 @@ export default function CircuitRecorder({
             value={formData.ocpd_bs_en}
             onChange={(v) => updateField('ocpd_bs_en', v)}
             placeholder="e.g. 60898"
+            lowConfidence={isLowConfidence('ocpd_bs_en')}
           />
           <div className="grid grid-cols-3 gap-3">
             <SelectField
@@ -749,6 +815,7 @@ export default function CircuitRecorder({
               value={formData.ocpd_type}
               onChange={(v) => updateField('ocpd_type', v as OCPDType | '')}
               options={OCPD_TYPES.map((t) => ({ value: t, label: t }))}
+              lowConfidence={isLowConfidence('ocpd_type')}
             />
             <SelectField
               label="Rating"
@@ -756,6 +823,7 @@ export default function CircuitRecorder({
               onChange={(v) => updateField('ocpd_rating', v)}
               options={COMMON_RATINGS.map((r) => ({ value: r, label: `${r}A` }))}
               placeholder="A"
+              lowConfidence={isLowConfidence('ocpd_rating')}
             />
             <TextField
               label="kA"
@@ -763,6 +831,7 @@ export default function CircuitRecorder({
               onChange={(v) => updateField('ocpd_short_circuit_capacity', v)}
               inputMode="decimal"
               suffix="kA"
+              lowConfidence={isLowConfidence('ocpd_short_circuit_capacity')}
             />
           </div>
           <TextField
@@ -771,6 +840,7 @@ export default function CircuitRecorder({
             onChange={(v) => updateField('max_disconnection_time', v)}
             inputMode="decimal"
             suffix="s"
+            lowConfidence={isLowConfidence('max_disconnection_time')}
           />
         </FormSection>
 
@@ -783,6 +853,7 @@ export default function CircuitRecorder({
               onChange={(v) => updateField('live_csa', v)}
               options={COMMON_CSA.map((c) => ({ value: c, label: `${c} mm²` }))}
               placeholder="mm²"
+              lowConfidence={isLowConfidence('live_csa')}
             />
             <SelectField
               label="CPC CSA"
@@ -790,6 +861,7 @@ export default function CircuitRecorder({
               onChange={(v) => updateField('cpc_csa', v)}
               options={COMMON_CSA.map((c) => ({ value: c, label: `${c} mm²` }))}
               placeholder="mm²"
+              lowConfidence={isLowConfidence('cpc_csa')}
             />
           </div>
         </FormSection>
@@ -807,6 +879,7 @@ export default function CircuitRecorder({
               inputMode="decimal"
               suffix="Ω"
               placeholder={formData.ocpd_type && formData.ocpd_rating ? 'Auto' : ''}
+              lowConfidence={isLowConfidence('max_zs')}
             />
             <TextField
               label="Measured Zs"
@@ -815,6 +888,7 @@ export default function CircuitRecorder({
               inputMode="decimal"
               suffix="Ω"
               warning={zsWarning}
+              lowConfidence={isLowConfidence('measured_zs')}
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -824,6 +898,7 @@ export default function CircuitRecorder({
               onChange={(v) => updateField('r1_plus_r2', v)}
               inputMode="decimal"
               suffix="Ω"
+              lowConfidence={isLowConfidence('r1_plus_r2')}
             />
             <TextField
               label="R2"
@@ -831,6 +906,7 @@ export default function CircuitRecorder({
               onChange={(v) => updateField('r2', v)}
               inputMode="decimal"
               suffix="Ω"
+              lowConfidence={isLowConfidence('r2')}
             />
           </div>
 
@@ -843,6 +919,7 @@ export default function CircuitRecorder({
               onChange={(v) => updateField('ring_r1', v)}
               inputMode="decimal"
               suffix="Ω"
+              lowConfidence={isLowConfidence('ring_r1')}
             />
             <TextField
               label="rn"
@@ -850,6 +927,7 @@ export default function CircuitRecorder({
               onChange={(v) => updateField('ring_rn', v)}
               inputMode="decimal"
               suffix="Ω"
+              lowConfidence={isLowConfidence('ring_rn')}
             />
             <TextField
               label="r2"
@@ -857,6 +935,7 @@ export default function CircuitRecorder({
               onChange={(v) => updateField('ring_r2', v)}
               inputMode="decimal"
               suffix="Ω"
+              lowConfidence={isLowConfidence('ring_r2')}
             />
           </div>
 
@@ -867,6 +946,7 @@ export default function CircuitRecorder({
               onChange={(v) => updateField('insulation_live_live', v)}
               inputMode="decimal"
               suffix="MΩ"
+              lowConfidence={isLowConfidence('insulation_live_live')}
             />
             <TextField
               label="IR Live/Earth"
@@ -874,6 +954,7 @@ export default function CircuitRecorder({
               onChange={(v) => updateField('insulation_live_earth', v)}
               inputMode="decimal"
               suffix="MΩ"
+              lowConfidence={isLowConfidence('insulation_live_earth')}
             />
           </div>
 
@@ -893,6 +974,7 @@ export default function CircuitRecorder({
             value={formData.rcd_type}
             onChange={(v) => updateField('rcd_type', v as RCDType | '')}
             options={RCD_TYPES.map((t) => ({ value: t, label: t }))}
+            lowConfidence={isLowConfidence('rcd_type')}
           />
           <div className="grid grid-cols-2 gap-3">
             <TextField
@@ -901,6 +983,7 @@ export default function CircuitRecorder({
               onChange={(v) => updateField('rcd_rated_current', v)}
               inputMode="numeric"
               suffix="mA"
+              lowConfidence={isLowConfidence('rcd_rated_current')}
             />
             <TextField
               label="Operating Time"
@@ -908,6 +991,7 @@ export default function CircuitRecorder({
               onChange={(v) => updateField('rcd_operating_time', v)}
               inputMode="numeric"
               suffix="ms"
+              lowConfidence={isLowConfidence('rcd_operating_time')}
             />
           </div>
           <TickField
@@ -942,6 +1026,20 @@ export default function CircuitRecorder({
             />
           </div>
         </FormSection>
+
+        {/* ── Voice Transcript (evidence trail — only shown for voice mode) ── */}
+        {voiceTranscript && (
+          <FormSection title="Voice Transcript" defaultOpen={false}>
+            <div className="bg-slate-800/50 rounded-md p-3 border border-slate-700">
+              <p className="text-xs text-slate-400 font-mono leading-relaxed whitespace-pre-wrap">
+                {voiceTranscript}
+              </p>
+            </div>
+            <p className="text-[10px] text-slate-500 mt-1">
+              Original voice recording transcript — stored for audit trail
+            </p>
+          </FormSection>
+        )}
       </div>
     </div>
   )
