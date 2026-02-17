@@ -138,10 +138,22 @@ export default function InspectionCapture() {
   const [showObservationRecorder, setShowObservationRecorder] = useState(false)
   const [editingCircuitIndex, setEditingCircuitIndex] = useState<number | null>(null)
   const [editingObsIndex, setEditingObsIndex] = useState<number | null>(null)
+  const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set())
+
+  // --- Transcript toggle (view without entering edit mode) ---
+  const toggleTranscript = useCallback((id: string) => {
+    setExpandedTranscripts((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
 
   // --- Sync service ---
   const syncServiceRef = useRef<ReturnType<typeof createSyncService> | null>(null)
   const [syncReady, setSyncReady] = useState(false)
+
   // --- Persist helper: saves to IndexedDB + triggers sync ---
   const persistCertificate = useCallback(
     async (cert: Partial<EICRCertificate>) => {
@@ -276,14 +288,14 @@ export default function InspectionCapture() {
 
   useEffect(() => {
     const service = createSyncService(getTokenSafe)
-syncServiceRef.current = service
-setSyncReady(true)
-service.start()
+    syncServiceRef.current = service
+    setSyncReady(true)
+    service.start()
 
     return () => {
       service.stop()
-syncServiceRef.current = null
-setSyncReady(false)
+      syncServiceRef.current = null
+      setSyncReady(false)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -369,6 +381,8 @@ setSyncReady(false)
               circuitType: circuit.circuitType ?? null,
               status: circuit.status ?? 'INCOMPLETE',
               validationWarnings: circuit.validationWarnings ?? [],
+              voiceTranscript: circuit.voiceTranscript ?? undefined,
+              fieldConfidence: circuit.fieldConfidence ?? undefined,
             }
             existing.push(newCircuit)
           }
@@ -410,6 +424,8 @@ setSyncReady(false)
               regulationReference: observation.regulationReference ?? '',
               photoKeys: observation.photoKeys ?? [],
               remedialAction: observation.remedialAction ?? '',
+              voiceTranscript: observation.voiceTranscript ?? undefined,
+              fieldConfidence: observation.fieldConfidence ?? undefined,
             }
             existing.push(newObs)
           }
@@ -629,44 +645,62 @@ setSyncReady(false)
           )
           const isPass = circuit.status === 'SATISFACTORY'
           return (
-            <button
-              key={circuit.id ?? `${circuit.circuitNumber}-${idx}`}
-              type="button"
-              onClick={() => {
-                setEditingCircuitIndex(globalIdx)
-                setRecorderMode('manual')
-              }}
-              className="cv-panel w-full text-left p-3 hover:border-certvoice-accent/50 transition-colors"
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-sm font-semibold text-certvoice-text">
-                    Cct {circuit.circuitNumber}
-                  </span>
-                  <span className="text-xs text-certvoice-muted ml-2">
-                    {circuit.circuitDescription ?? ''}
+            <div key={circuit.id ?? `${circuit.circuitNumber}-${idx}`} className="space-y-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingCircuitIndex(globalIdx)
+                  setRecorderMode('manual')
+                }}
+                className="cv-panel w-full text-left p-3 hover:border-certvoice-accent/50 transition-colors"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-sm font-semibold text-certvoice-text">
+                      Cct {circuit.circuitNumber}
+                    </span>
+                    <span className="text-xs text-certvoice-muted ml-2">
+                      {circuit.circuitDescription ?? ''}
+                    </span>
+                  </div>
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      isPass ? 'cv-badge-pass' : 'cv-badge-fail'
+                    }`}
+                  >
+                    {circuit.status ?? 'INCOMPLETE'}
                   </span>
                 </div>
-                <span
-                  className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                    isPass ? 'cv-badge-pass' : 'cv-badge-fail'
-                  }`}
+                {circuit.zs !== null && circuit.zs !== undefined && (
+                  <div className="text-[10px] text-certvoice-muted mt-1">
+                    Zs: {circuit.zs}Ω{circuit.r1r2 ? ` · R1+R2: ${circuit.r1r2}Ω` : ''}
+                    {circuit.rcdDisconnectionTime ? ` · RCD: ${circuit.rcdDisconnectionTime}ms` : ''}
+                  </div>
+                )}
+                {circuit.remarks && (
+                  <div className="text-[10px] text-certvoice-muted mt-1">
+                    {circuit.remarks}
+                  </div>
+                )}
+              </button>
+              {circuit.voiceTranscript && (
+                <button
+                  type="button"
+                  onClick={() => toggleTranscript(circuit.id)}
+                  className="flex items-center gap-1 px-3 py-1 text-[10px] text-certvoice-muted hover:text-certvoice-accent transition-colors"
                 >
-                  {circuit.status ?? 'INCOMPLETE'}
-                </span>
-              </div>
-              {circuit.zs !== null && circuit.zs !== undefined && (
-                <div className="text-[10px] text-certvoice-muted mt-1">
-                  Zs: {circuit.zs}Ω{circuit.r1r2 ? ` · R1+R2: ${circuit.r1r2}Ω` : ''}
-                  {circuit.rcdDisconnectionTime ? ` · RCD: ${circuit.rcdDisconnectionTime}ms` : ''}
+                  <Mic className="w-2.5 h-2.5" />
+                  {expandedTranscripts.has(circuit.id) ? 'Hide' : 'View'} transcript
+                </button>
+              )}
+              {expandedTranscripts.has(circuit.id) && circuit.voiceTranscript && (
+                <div className="bg-certvoice-surface-2 border border-certvoice-border rounded-lg px-3 py-2">
+                  <p className="text-[10px] text-certvoice-muted font-mono leading-relaxed whitespace-pre-wrap">
+                    {circuit.voiceTranscript}
+                  </p>
                 </div>
               )}
-              {circuit.remarks && (
-                <div className="text-[10px] text-certvoice-muted mt-1">
-                  {circuit.remarks}
-                </div>
-              )}
-            </button>
+            </div>
           )
         })
       )}
@@ -751,34 +785,52 @@ setSyncReady(false)
         </div>
       ) : (
         observations.map((obs, idx) => (
-          <button
-            key={obs.id ?? `obs-${obs.itemNumber}-${idx}`}
-            type="button"
-            onClick={() => {
-              setEditingObsIndex(idx)
-              setShowObservationRecorder(true)
-            }}
-            className="cv-panel w-full text-left p-3 hover:border-certvoice-accent/50 transition-colors"
-          >
-            <div className="flex items-start gap-2">
-              <span
-                className={`text-[10px] font-bold px-2 py-0.5 rounded shrink-0 mt-0.5 ${
-                  obs.classificationCode === 'C1' ? 'cv-code-c1'
-                    : obs.classificationCode === 'C2' ? 'cv-code-c2'
-                    : obs.classificationCode === 'C3' ? 'cv-code-c3'
-                    : 'cv-code-fi'
-                }`}
-              >
-                {obs.classificationCode}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="text-xs text-certvoice-text line-clamp-2">{obs.observationText ?? ''}</div>
-                {obs.regulationReference && (
-                  <div className="text-[10px] text-certvoice-muted mt-1 font-mono">{obs.regulationReference}</div>
-                )}
+          <div key={obs.id ?? `obs-${obs.itemNumber}-${idx}`} className="space-y-1">
+            <button
+              type="button"
+              onClick={() => {
+                setEditingObsIndex(idx)
+                setShowObservationRecorder(true)
+              }}
+              className="cv-panel w-full text-left p-3 hover:border-certvoice-accent/50 transition-colors"
+            >
+              <div className="flex items-start gap-2">
+                <span
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded shrink-0 mt-0.5 ${
+                    obs.classificationCode === 'C1' ? 'cv-code-c1'
+                      : obs.classificationCode === 'C2' ? 'cv-code-c2'
+                      : obs.classificationCode === 'C3' ? 'cv-code-c3'
+                      : 'cv-code-fi'
+                  }`}
+                >
+                  {obs.classificationCode}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs text-certvoice-text line-clamp-2">{obs.observationText ?? ''}</div>
+                  {obs.regulationReference && (
+                    <div className="text-[10px] text-certvoice-muted mt-1 font-mono">{obs.regulationReference}</div>
+                  )}
+                </div>
               </div>
-            </div>
-          </button>
+            </button>
+            {obs.voiceTranscript && (
+              <button
+                type="button"
+                onClick={() => toggleTranscript(obs.id)}
+                className="flex items-center gap-1 px-3 py-1 text-[10px] text-certvoice-muted hover:text-certvoice-accent transition-colors"
+              >
+                <Mic className="w-2.5 h-2.5" />
+                {expandedTranscripts.has(obs.id) ? 'Hide' : 'View'} transcript
+              </button>
+            )}
+            {expandedTranscripts.has(obs.id) && obs.voiceTranscript && (
+              <div className="bg-certvoice-surface-2 border border-certvoice-border rounded-lg px-3 py-2">
+                <p className="text-[10px] text-certvoice-muted font-mono leading-relaxed whitespace-pre-wrap">
+                  {obs.voiceTranscript}
+                </p>
+              </div>
+            )}
+          </div>
         ))
       )}
 
@@ -890,7 +942,7 @@ setSyncReady(false)
             </p>
           </div>
           {syncReady && syncServiceRef.current && (
-  <SyncIndicator
+            <SyncIndicator
               onStatusChange={syncServiceRef.current.onStatusChange}
               onSyncNow={() => syncServiceRef.current?.syncNow()}
             />
