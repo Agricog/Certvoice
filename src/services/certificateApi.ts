@@ -132,7 +132,7 @@ async function apiCall<T>(
       const body = await response.json()
       requestId = body?.requestId
     } catch { /* ignore parse failure */ }
-    throw new ApiRateLimitError(isNaN(retrySeconds) ? 60 : retrySeconds, requestId)
+    throw new ApiRateLimitError(isNaN(retrySeconds) ? 60 : retrySeconds)
   }
 
   // --- Handle 401 (session expired mid-request) ---
