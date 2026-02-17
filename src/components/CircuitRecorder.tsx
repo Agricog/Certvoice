@@ -526,13 +526,13 @@ export default function CircuitRecorder({
       const token = await getToken()
       const apiBase = import.meta.env.VITE_API_BASE_URL
 
-      const res = await fetch(`${apiBase}/api/extract/circuit`, {
+      const res = await fetch(`${apiBase}/api/extract`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ transcript, dbContext }),
+        body: JSON.stringify({ transcript, dbContext, type: 'circuit' }),
       })
 
       if (!res.ok) throw new Error(`Extraction failed (${res.status})`)
