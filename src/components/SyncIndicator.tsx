@@ -5,17 +5,18 @@
  * Placed in the inspection capture header.
  *
  * States:
- *   synced  — green dot, "Saved"
- *   syncing — animated spinner, "Syncing..."
- *   offline — amber dot, "Offline" (data safe locally)
- *   error   — red dot, "Sync error" (tap to retry)
- *   idle    — grey dot (waiting)
+ *   synced         — green dot, "Saved"
+ *   syncing        — animated spinner, "Syncing..."
+ *   offline        — amber dot, "Offline" (data safe locally)
+ *   error          — red dot, "Sync error" (tap to retry)
+ *   auth-required  — amber dot, "Sign in" (session expired)
+ *   idle           — grey dot (waiting)
  *
  * @module components/SyncIndicator
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { Cloud, CloudOff, RefreshCw, Check, AlertCircle } from 'lucide-react'
+import { Cloud, CloudOff, RefreshCw, Check, AlertCircle, LogIn } from 'lucide-react'
 import type { SyncServiceState, SyncStatus } from '../services/syncService'
 
 // ============================================================
@@ -59,6 +60,11 @@ const STATUS_CONFIG: Record<SyncStatus, {
     icon: AlertCircle,
     label: 'Sync error',
     className: 'text-certvoice-red bg-certvoice-red/10 border-certvoice-red/30',
+  },
+  'auth-required': {
+    icon: LogIn,
+    label: 'Sign in',
+    className: 'text-certvoice-amber bg-certvoice-amber/10 border-certvoice-amber/30',
   },
   idle: {
     icon: Cloud,
