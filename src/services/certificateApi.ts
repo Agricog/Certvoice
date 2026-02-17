@@ -127,11 +127,6 @@ async function apiCall<T>(
   if (response.status === 429) {
     const retryHeader = response.headers.get('Retry-After')
     const retrySeconds = retryHeader ? parseInt(retryHeader, 10) : 60
-    let requestId: string | undefined
-    try {
-      const body = await response.json()
-      requestId = body?.requestId
-    } catch { /* ignore parse failure */ }
     throw new ApiRateLimitError(isNaN(retrySeconds) ? 60 : retrySeconds)
   }
 
