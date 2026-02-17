@@ -52,6 +52,8 @@ export interface AIExtractionResponse {
   observation?: Partial<Observation>
   /** Extracted supply data (if type === 'supply') */
   supply?: Partial<SupplyCharacteristics>
+  /** Per-field confidence scores 0-1 (keys match extracted data field names) */
+  fieldConfidence?: Record<string, number>
   /** Validation warnings generated during extraction */
   warnings: string[]
   /** Raw AI reasoning (for debugging, never shown to user) */
