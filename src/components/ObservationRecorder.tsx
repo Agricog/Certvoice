@@ -10,6 +10,10 @@
  *   4. PhotoCapture allows evidence photos during review
  *   5. Observation added to Section K with photo keys
  *
+ * Confidence UX:
+ *   - AI-extracted fields show amber highlight when confidence < 0.7
+ *   - Voice transcript stored for evidence trail
+ *
  * Classification codes determine the overall report assessment:
  *   C1 or C2 → UNSATISFACTORY
  *   C3 only → SATISFACTORY
@@ -24,6 +28,9 @@ import {
   AlertTriangle,
   Shield,
   BookOpen,
+  ChevronDown,
+  ChevronUp,
+  Mic,
 } from 'lucide-react'
 import VoiceCapture from './VoiceCapture'
 import PhotoCapture from './PhotoCapture'
@@ -60,6 +67,13 @@ interface ObservationRecorderProps {
 }
 
 type RecorderStep = 'capture' | 'review' | 'confirmed'
+
+// ============================================================
+// CONSTANTS
+// ============================================================
+
+/** Fields below this confidence score get amber highlighting */
+const CONFIDENCE_THRESHOLD = 0.7
 
 // ============================================================
 // CLASSIFICATION BADGE
@@ -135,6 +149,15 @@ export default function ObservationRecorder({
     editingObservation?.photoKeys ?? []
   )
 
+  // Voice transcript + AI confidence state
+  const [voiceTranscript, setVoiceTranscript] = useState<string | null>(
+    isEditing ? (editingObservation?.voiceTranscript ?? null) : null
+  )
+  const [fieldConfidence, setFieldConfidence] = useState<Record<string, number> | null>(
+    isEditing ? (editingObservation?.fieldConfidence ?? null) : null
+  )
+  const [showTranscript, setShowTranscript] = useState(false)
+
   const {
     status: extractionStatus,
     error: extractionError,
@@ -149,10 +172,24 @@ export default function ObservationRecorder({
     earthingType,
   }
 
+  /** Check if a field has low AI confidence */
+  const isLowConfidence = useCallback(
+    (fieldKey: string): boolean => {
+      if (!fieldConfidence) return false
+      const score = fieldConfidence[fieldKey]
+      return score !== undefined && score < CONFIDENCE_THRESHOLD
+    },
+    [fieldConfidence]
+  )
+
   // --- Handle transcript ---
   const handleTranscript = useCallback(
     async (transcript: string, _durationMs: number) => {
       const processed = preprocessTranscript(transcript)
+
+      // Store transcript for evidence trail
+      setVoiceTranscript(processed)
+
       const result = await extract(processed, context)
 
       if (result?.success && result.type === 'observation' && result.observation) {
@@ -164,6 +201,7 @@ export default function ObservationRecorder({
         })
         setSelectedCode(obs.classificationCode ?? null)
         setWarnings(result.warnings)
+        if (result.fieldConfidence) setFieldConfidence(result.fieldConfidence)
         setStep('review')
       }
     },
@@ -192,13 +230,15 @@ export default function ObservationRecorder({
       ...extractedObs,
       classificationCode: selectedCode,
       photoKeys,
+      voiceTranscript: voiceTranscript ?? undefined,
+      fieldConfidence: fieldConfidence ?? undefined,
     }
 
     onObservationConfirmed(finalObs)
     setStep('confirmed')
 
     trackObservationCaptured(selectedCode, photoKeys.length > 0)
-  }, [extractedObs, selectedCode, photoKeys, onObservationConfirmed])
+  }, [extractedObs, selectedCode, photoKeys, voiceTranscript, fieldConfidence, onObservationConfirmed])
 
   // --- Retry ---
   const handleRetry = useCallback(() => {
@@ -207,6 +247,9 @@ export default function ObservationRecorder({
     setSelectedCode(null)
     setWarnings([])
     setPhotoKeys([])
+    setVoiceTranscript(null)
+    setFieldConfidence(null)
+    setShowTranscript(false)
     resetExtraction()
   }, [resetExtraction])
 
@@ -289,6 +332,10 @@ export default function ObservationRecorder({
 
   if (!extractedObs) return null
 
+  const hasLowConfidenceFields = fieldConfidence
+    ? Object.values(fieldConfidence).some((v) => v < CONFIDENCE_THRESHOLD)
+    : false
+
   return (
     <div className="cv-panel space-y-4">
       {/* Header */}
@@ -300,6 +347,16 @@ export default function ObservationRecorder({
           </h3>
         </div>
       </div>
+
+      {/* Confidence banner */}
+      {hasLowConfidenceFields && (
+        <div className="bg-certvoice-amber/10 border border-certvoice-amber/30 rounded-lg p-2 flex items-center gap-2">
+          <AlertTriangle className="w-3.5 h-3.5 text-certvoice-amber flex-shrink-0" />
+          <p className="text-xs text-certvoice-amber">
+            Some fields have low AI confidence (amber highlighted). Please verify.
+          </p>
+        </div>
+      )}
 
       {/* Classification Code (large badge + selector) */}
       {selectedCode && <ClassificationBadge code={selectedCode} size="large" />}
@@ -329,6 +386,12 @@ export default function ObservationRecorder({
             )
           })}
         </div>
+        {isLowConfidence('classificationCode') && (
+          <div className="flex items-center gap-1 text-xs text-certvoice-amber/70">
+            <AlertTriangle className="w-3 h-3" />
+            Low confidence — verify classification
+          </div>
+        )}
       </div>
 
       {/* Warnings */}
@@ -347,7 +410,7 @@ export default function ObservationRecorder({
       )}
 
       {/* Observation Text */}
-      <div className="cv-data-field">
+      <div className={`cv-data-field ${isLowConfidence('observationText') ? 'border-certvoice-amber/40 bg-certvoice-amber/5' : ''}`}>
         <div className="cv-data-label">Observation</div>
         <textarea
           value={extractedObs.observationText ?? ''}
@@ -360,36 +423,60 @@ export default function ObservationRecorder({
           className="w-full bg-transparent text-xs text-certvoice-text border-none outline-none
                      resize-none focus:text-certvoice-accent font-mono leading-relaxed"
         />
+        {isLowConfidence('observationText') && (
+          <div className="flex items-center gap-1 text-[10px] text-certvoice-amber/70 mt-1">
+            <AlertTriangle className="w-2.5 h-2.5" />
+            Low confidence — verify observation text
+          </div>
+        )}
       </div>
 
       {/* Details Grid */}
       <div className="grid grid-cols-2 gap-2">
-        <div className="cv-data-field">
+        <div className={`cv-data-field ${isLowConfidence('location') ? 'border-certvoice-amber/40 bg-certvoice-amber/5' : ''}`}>
           <div className="cv-data-label">Location</div>
           <div className="cv-data-value">{extractedObs.location ?? locationContext}</div>
+          {isLowConfidence('location') && (
+            <div className="flex items-center gap-1 text-[10px] text-certvoice-amber/70 mt-1">
+              <AlertTriangle className="w-2.5 h-2.5" />
+              Verify
+            </div>
+          )}
         </div>
         <div className="cv-data-field">
           <div className="cv-data-label">DB Reference</div>
           <div className="cv-data-value">{extractedObs.dbReference ?? dbContext ?? '—'}</div>
         </div>
-        <div className="cv-data-field">
+        <div className={`cv-data-field ${isLowConfidence('circuitReference') ? 'border-certvoice-amber/40 bg-certvoice-amber/5' : ''}`}>
           <div className="cv-data-label">Circuit Ref</div>
           <div className="cv-data-value">{extractedObs.circuitReference ?? '—'}</div>
+          {isLowConfidence('circuitReference') && (
+            <div className="flex items-center gap-1 text-[10px] text-certvoice-amber/70 mt-1">
+              <AlertTriangle className="w-2.5 h-2.5" />
+              Verify
+            </div>
+          )}
         </div>
-        <div className="cv-data-field flex items-center gap-1">
+        <div className={`cv-data-field flex items-center gap-1 ${isLowConfidence('regulationReference') ? 'border-certvoice-amber/40 bg-certvoice-amber/5' : ''}`}>
           <BookOpen className="w-3 h-3 text-certvoice-muted" />
           <div>
             <div className="cv-data-label">Regulation</div>
             <div className="cv-data-value font-mono">
               {extractedObs.regulationReference ?? '—'}
             </div>
+            {isLowConfidence('regulationReference') && (
+              <div className="flex items-center gap-1 text-[10px] text-certvoice-amber/70 mt-1">
+                <AlertTriangle className="w-2.5 h-2.5" />
+                Verify
+              </div>
+            )}
           </div>
         </div>
       </div>
 
       {/* Remedial Action */}
       {extractedObs.remedialAction && (
-        <div className="cv-data-field">
+        <div className={`cv-data-field ${isLowConfidence('remedialAction') ? 'border-certvoice-amber/40 bg-certvoice-amber/5' : ''}`}>
           <div className="cv-data-label">Remedial Action</div>
           <textarea
             value={extractedObs.remedialAction}
@@ -402,6 +489,39 @@ export default function ObservationRecorder({
             className="w-full bg-transparent text-xs text-certvoice-text border-none outline-none
                        resize-none focus:text-certvoice-accent"
           />
+          {isLowConfidence('remedialAction') && (
+            <div className="flex items-center gap-1 text-[10px] text-certvoice-amber/70 mt-1">
+              <AlertTriangle className="w-2.5 h-2.5" />
+              Low confidence — verify remedial action
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Voice Transcript (evidence trail) */}
+      {voiceTranscript && (
+        <div className="border border-certvoice-border rounded-lg overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowTranscript(!showTranscript)}
+            className="w-full flex items-center justify-between px-3 py-2 bg-certvoice-surface-2 text-xs text-certvoice-muted hover:text-certvoice-text transition-colors"
+          >
+            <div className="flex items-center gap-1.5">
+              <Mic className="w-3 h-3" />
+              Voice Transcript
+            </div>
+            {showTranscript ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          </button>
+          {showTranscript && (
+            <div className="px-3 py-2 bg-certvoice-bg">
+              <p className="text-[10px] text-certvoice-muted font-mono leading-relaxed whitespace-pre-wrap">
+                {voiceTranscript}
+              </p>
+              <p className="text-[9px] text-certvoice-muted/50 mt-1">
+                Original voice transcript — stored for audit trail
+              </p>
+            </div>
+          )}
         </div>
       )}
 
