@@ -15,7 +15,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useLocation, useParams, useNavigate, Link } from 'react-router-dom'
-import { useAuth } from '@clerk/clerk-react'
+import { useApiToken } from '../hooks/useApiToken'
 import { Helmet } from 'react-helmet-async'
 import {
   ArrowLeft,
@@ -121,7 +121,7 @@ export default function InspectionCapture() {
   const location = useLocation()
   const params = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { getToken } = useAuth()
+  const { getToken, getTokenSafe } = useApiToken()
 
   // --- Engineer profile for DeclarationForm auto-fill ---
   const { profile: engineerProfile } = useEngineerProfile()
@@ -275,7 +275,7 @@ export default function InspectionCapture() {
   // ============================================================
 
   useEffect(() => {
-    const service = createSyncService(getToken)
+    const service = createSyncService(getTokenSafe)
     syncServiceRef.current = service
     service.start()
 
