@@ -359,11 +359,7 @@ export default function Home() {
                   return (
                     <Link
                       key={cert.id}
-                      to={
-                        status === 'DRAFT'
-                          ? '/new'
-                          : `/inspect/${cert.id}`
-                      }
+                      to={`/inspect/${cert.id}`}
                       state={{ certificate: cert }}
                       className="cv-panel block p-4 hover:border-certvoice-accent/50 transition-colors"
                     >
