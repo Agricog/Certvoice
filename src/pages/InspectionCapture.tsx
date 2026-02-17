@@ -30,6 +30,7 @@ import {
   Mic,
   Pencil,
   FileSignature,
+  Download,
 } from 'lucide-react'
 import type {
   EICRCertificate,
@@ -55,6 +56,7 @@ import { trackCircuitCaptured, trackObservationCaptured, trackChecklistProgress 
 import { saveCertificate as saveToLocal, getCertificate as getFromLocal } from '../services/offlineStore'
 import { getCertificate as getFromApi, createCertificate } from '../services/certificateApi'
 import { createSyncService } from '../services/syncService'
+import { downloadEICRPdf } from '../services/pdfGenerator'
 
 // ============================================================
 // TYPES
@@ -139,6 +141,19 @@ export default function InspectionCapture() {
   const [editingCircuitIndex, setEditingCircuitIndex] = useState<number | null>(null)
   const [editingObsIndex, setEditingObsIndex] = useState<number | null>(null)
   const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set())
+  const [isExporting, setIsExporting] = useState(false)
+
+  // --- PDF export ---
+  const handleExportPdf = useCallback(async () => {
+    setIsExporting(true)
+    try {
+      await downloadEICRPdf(certificate)
+    } catch (err) {
+      captureError(err, 'InspectionCapture.handleExportPdf')
+    } finally {
+      setIsExporting(false)
+    }
+  }, [certificate])
 
   // --- Transcript toggle (view without entering edit mode) ---
   const toggleTranscript = useCallback((id: string) => {
@@ -947,6 +962,17 @@ export default function InspectionCapture() {
               onSyncNow={() => syncServiceRef.current?.syncNow()}
             />
           )}
+          <button
+            type="button"
+            onClick={handleExportPdf}
+            disabled={isExporting}
+            className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
+                       text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Export PDF"
+          >
+            {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+          </button>
           <button
             type="button"
             onClick={handleSave}
