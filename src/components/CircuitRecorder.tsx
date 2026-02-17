@@ -539,7 +539,33 @@ export default function CircuitRecorder({
 
       const data = await res.json()
       if (data.success && data.circuit) {
-        setFormData((prev) => ({ ...prev, ...data.circuit }))
+        const c = data.circuit
+        setFormData((prev) => ({
+          ...prev,
+          circuit_number: c.circuitNumber ?? prev.circuit_number,
+          description: c.circuitDescription ?? prev.description,
+          type_of_wiring: c.wiringType ?? prev.type_of_wiring,
+          reference_method: c.referenceMethod ?? prev.reference_method,
+          number_of_points: c.numberOfPoints != null ? String(c.numberOfPoints) : prev.number_of_points,
+          ocpd_bs_en: c.ocpdBsEn ?? prev.ocpd_bs_en,
+          ocpd_type: c.ocpdType ?? prev.ocpd_type,
+          ocpd_rating: c.ocpdRating != null ? String(c.ocpdRating) : prev.ocpd_rating,
+          live_csa: c.liveConductorCsa != null ? String(c.liveConductorCsa) : prev.live_csa,
+          cpc_csa: c.cpcCsa != null ? String(c.cpcCsa) : prev.cpc_csa,
+          measured_zs: c.zs != null ? String(c.zs) : prev.measured_zs,
+          r1_plus_r2: c.r1r2 != null ? String(c.r1r2) : prev.r1_plus_r2,
+          r2: c.r2 != null ? String(c.r2) : prev.r2,
+          ring_r1: c.r1 != null ? String(c.r1) : prev.ring_r1,
+          ring_rn: c.rn != null ? String(c.rn) : prev.ring_rn,
+          ring_r2: c.r2 != null ? String(c.r2) : prev.ring_r2,
+          insulation_live_live: c.irLiveLive != null ? String(c.irLiveLive) : prev.insulation_live_live,
+          insulation_live_earth: c.irLiveEarth != null ? String(c.irLiveEarth) : prev.insulation_live_earth,
+          polarity_confirmed: c.polarity ?? prev.polarity_confirmed,
+          rcd_type: c.rcdType ?? prev.rcd_type,
+          rcd_rated_current: c.rcdRating != null ? String(c.rcdRating) : prev.rcd_rated_current,
+          rcd_operating_time: c.rcdDisconnectionTime != null ? String(c.rcdDisconnectionTime) : prev.rcd_operating_time,
+          comments: c.remarks ?? prev.comments,
+        }))
         if (data.fieldConfidence) setFieldConfidence(data.fieldConfidence)
       }
 
