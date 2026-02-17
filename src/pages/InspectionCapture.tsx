@@ -17,6 +17,7 @@ import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useLocation, useParams, useNavigate, Link } from 'react-router-dom'
 import { useApiToken } from '../hooks/useApiToken'
 import { Helmet } from 'react-helmet-async'
+import type { EICRCertificate } from '../types/eicr'
 import {
   ArrowLeft,
   Zap,
@@ -147,7 +148,7 @@ export default function InspectionCapture() {
   const handleExportPdf = useCallback(async () => {
     setIsExporting(true)
     try {
-      await downloadEICRPdf(certificate)
+      await downloadEICRPdf(certificate as EICRCertificate)
     } catch (err) {
       captureError(err, 'InspectionCapture.handleExportPdf')
     } finally {
