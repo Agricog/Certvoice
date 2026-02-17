@@ -141,7 +141,7 @@ export default function InspectionCapture() {
 
   // --- Sync service ---
   const syncServiceRef = useRef<ReturnType<typeof createSyncService> | null>(null)
-
+  const [syncReady, setSyncReady] = useState(false)
   // --- Persist helper: saves to IndexedDB + triggers sync ---
   const persistCertificate = useCallback(
     async (cert: Partial<EICRCertificate>) => {
@@ -276,12 +276,14 @@ export default function InspectionCapture() {
 
   useEffect(() => {
     const service = createSyncService(getTokenSafe)
-    syncServiceRef.current = service
-    service.start()
+syncServiceRef.current = service
+setSyncReady(true)
+service.start()
 
     return () => {
       service.stop()
-      syncServiceRef.current = null
+syncServiceRef.current = null
+setSyncReady(false)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -887,8 +889,8 @@ export default function InspectionCapture() {
               {certificate.clientDetails?.clientName ?? ''}
             </p>
           </div>
-          {syncServiceRef.current && (
-            <SyncIndicator
+          {syncReady && syncServiceRef.current && (
+  <SyncIndicator
               onStatusChange={syncServiceRef.current.onStatusChange}
               onSyncNow={() => syncServiceRef.current?.syncNow()}
             />
