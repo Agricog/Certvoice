@@ -34,6 +34,7 @@ import {
   AlertTriangle,
   Trash2,
   Undo2,
+  LogOut,
 } from 'lucide-react'
 import { validateInput } from '../utils/validation'
 import { sanitizeText } from '../utils/sanitization'
@@ -128,7 +129,7 @@ const API_URL = `${API_BASE}/api/engineer/settings`
 
 export default function Settings() {
   const { user } = useUser()
-  const { getToken } = useAuth()
+  const { getToken, signOut } = useAuth()
 
   // --- State ---
   const [settings, setSettings] = useState<EngineerSettings>(EMPTY_SETTINGS)
@@ -735,12 +736,26 @@ export default function Settings() {
                 onCalDateChange={(v) => updateField('continuityTesterCalibrationDate', v)}
               />
 
-              <div className="bg-certvoice-surface-2 rounded-lg p-3 text-[10px] text-certvoice-muted">
+             <div className="bg-certvoice-surface-2 rounded-lg p-3 text-[10px] text-certvoice-muted">
                 Calibration dates are checked against the inspection date. CertVoice warns you if any
                 instrument was out of calibration during the inspection.
               </div>
             </div>
           )}
+
+          {/* ---- SIGN OUT ---- */}
+          <div className="pt-6 pb-4">
+            <button
+              type="button"
+              onClick={() => signOut({ redirectUrl: '/' })}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg
+                         border border-certvoice-red/30 text-sm font-semibold text-certvoice-red
+                         hover:bg-certvoice-red/5 transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out
+            </button>
+          </div>
         </div>
       </div>
     </>
