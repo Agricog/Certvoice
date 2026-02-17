@@ -22,7 +22,6 @@ import { PDFDocument, StandardFonts } from 'pdf-lib'
 import type { PDFFont, PDFPage } from 'pdf-lib'
 import type {
   EICRCertificate,
-  CircuitDetail,
   Observation,
   InspectionItem,
   ClassificationCode,
@@ -84,11 +83,7 @@ function fmtDate(iso: string | null | undefined): string {
 
 function fmtEarthing(code: string | null | undefined): string {
   const map: Record<string, string> = {
-    TN_C: 'TN-C',
-    TN_S: 'TN-S',
-    TN_C_S: 'TN-C-S',
-    TT: 'TT',
-    IT: 'IT',
+    TN_C: 'TN-C', TN_S: 'TN-S', TN_C_S: 'TN-C-S', TT: 'TT', IT: 'IT',
   }
   return code ? (map[code] ?? code) : '—'
 }
@@ -105,10 +100,7 @@ function fmtConductorConfig(code: string | null | undefined): string {
 
 function fmtPremises(code: string | null | undefined): string {
   const map: Record<string, string> = {
-    DOMESTIC: 'Domestic',
-    COMMERCIAL: 'Commercial',
-    INDUSTRIAL: 'Industrial',
-    OTHER: 'Other',
+    DOMESTIC: 'Domestic', COMMERCIAL: 'Commercial', INDUSTRIAL: 'Industrial', OTHER: 'Other',
   }
   return code ? (map[code] ?? code) : '—'
 }
@@ -126,11 +118,7 @@ function fmtPurpose(code: string | null | undefined): string {
 }
 
 function fmtBonding(code: string | null | undefined): string {
-  const map: Record<string, string> = {
-    SATISFACTORY: '✓',
-    NA: 'N/A',
-    UNSATISFACTORY: '✗',
-  }
+  const map: Record<string, string> = { SATISFACTORY: '✓', NA: 'N/A', UNSATISFACTORY: '✗' }
   return code ? (map[code] ?? code) : '—'
 }
 
@@ -165,20 +153,20 @@ function drawPage1(ctx: PDFContext, cert: Partial<EICRCertificate>, pageNum: num
   const { font, fontBold } = ctx
   let y = startY
 
-  // ── Section A: Client Details ──────────────────────────────
+  // Section A
   y = drawSectionHeader(page, fontBold, y, 'Section A — Client Details')
   y = drawField(page, font, fontBold, y, 'Client Name', fmt(cert.clientDetails?.clientName))
   y = drawField(page, font, fontBold, y, 'Client Address', fmt(cert.clientDetails?.clientAddress))
   y -= 4
 
-  // ── Section B: Reason for Report ───────────────────────────
+  // Section B
   y = drawSectionHeader(page, fontBold, y, 'Section B — Reason for Producing Report')
   y = drawField(page, font, fontBold, y, 'Purpose of Report', fmtPurpose(cert.reportReason?.purpose))
   const dates = cert.reportReason?.inspectionDates?.map(fmtDate).join(', ') ?? '—'
   y = drawField(page, font, fontBold, y, 'Date(s) of Inspection', dates)
   y -= 4
 
-  // ── Section C: Installation Details ────────────────────────
+  // Section C
   y = drawSectionHeader(page, fontBold, y, 'Section C — Details of Installation')
   y = drawField(page, font, fontBold, y, 'Installation Address', fmt(cert.installationDetails?.installationAddress))
   y = drawFieldPair(page, font, fontBold, y,
@@ -198,59 +186,23 @@ function drawPage1(ctx: PDFContext, cert: Partial<EICRCertificate>, pageNum: num
   }
   y -= 4
 
-  // ── Section D: Extent & Limitations ────────────────────────
+  // Section D
   y = drawSectionHeader(page, fontBold, y, 'Section D — Extent and Limitations')
 
-  // Extent — may wrap
-  const extentLines = wrapText(
-    fmt(cert.extentAndLimitations?.extentCovered),
-    font,
-    FONT.value,
-    CONTENT_WIDTH - 10
-  )
-  page.drawText('Extent of Installation Covered', {
-    x: PAGE.marginLeft,
-    y,
-    size: FONT.label,
-    font,
-    color: COLOURS.muted,
-  })
+  const extentLines = wrapText(fmt(cert.extentAndLimitations?.extentCovered), font, FONT.value, CONTENT_WIDTH - 10)
+  page.drawText('Extent of Installation Covered', { x: PAGE.marginLeft, y, size: FONT.label, font, color: COLOURS.muted })
   y -= 10
   for (const line of extentLines) {
-    page.drawText(line, {
-      x: PAGE.marginLeft + 4,
-      y,
-      size: FONT.value,
-      font: fontBold,
-      color: COLOURS.text,
-    })
+    page.drawText(line, { x: PAGE.marginLeft + 4, y, size: FONT.value, font: fontBold, color: COLOURS.text })
     y -= FONT.value * SPACING.lineHeight + 2
   }
   y -= 4
 
-  // Agreed limitations — may wrap
-  const limitLines = wrapText(
-    fmt(cert.extentAndLimitations?.agreedLimitations),
-    font,
-    FONT.value,
-    CONTENT_WIDTH - 10
-  )
-  page.drawText('Agreed Limitations', {
-    x: PAGE.marginLeft,
-    y,
-    size: FONT.label,
-    font,
-    color: COLOURS.muted,
-  })
+  const limitLines = wrapText(fmt(cert.extentAndLimitations?.agreedLimitations), font, FONT.value, CONTENT_WIDTH - 10)
+  page.drawText('Agreed Limitations', { x: PAGE.marginLeft, y, size: FONT.label, font, color: COLOURS.muted })
   y -= 10
   for (const line of limitLines) {
-    page.drawText(line, {
-      x: PAGE.marginLeft + 4,
-      y,
-      size: FONT.value,
-      font: fontBold,
-      color: COLOURS.text,
-    })
+    page.drawText(line, { x: PAGE.marginLeft + 4, y, size: FONT.value, font: fontBold, color: COLOURS.text })
     y -= FONT.value * SPACING.lineHeight + 2
   }
   y -= 4
@@ -272,80 +224,42 @@ function drawPage2(ctx: PDFContext, cert: Partial<EICRCertificate>, pageNum: num
   const { font, fontBold } = ctx
   let y = startY
 
-  // ── Section E: Summary of Condition ────────────────────────
+  // Section E
   y = drawSectionHeader(page, fontBold, y, 'Section E — Summary of the Condition of the Installation')
 
-  // General condition — may wrap
-  const condLines = wrapText(
-    fmt(cert.summaryOfCondition?.generalCondition),
-    font,
-    FONT.value,
-    CONTENT_WIDTH - 10
-  )
-  page.drawText('General Condition', {
-    x: PAGE.marginLeft,
-    y,
-    size: FONT.label,
-    font,
-    color: COLOURS.muted,
-  })
+  const condLines = wrapText(fmt(cert.summaryOfCondition?.generalCondition), font, FONT.value, CONTENT_WIDTH - 10)
+  page.drawText('General Condition', { x: PAGE.marginLeft, y, size: FONT.label, font, color: COLOURS.muted })
   y -= 10
   for (const line of condLines) {
-    page.drawText(line, {
-      x: PAGE.marginLeft + 4,
-      y,
-      size: FONT.value,
-      font: fontBold,
-      color: COLOURS.text,
-    })
+    page.drawText(line, { x: PAGE.marginLeft + 4, y, size: FONT.value, font: fontBold, color: COLOURS.text })
     y -= FONT.value * SPACING.lineHeight + 2
   }
   y -= 4
 
-  // Overall assessment — highlighted
   const assessment = cert.summaryOfCondition?.overallAssessment ?? 'UNSATISFACTORY'
   const assessColour = assessment === 'SATISFACTORY' ? COLOURS.pass : COLOURS.fail
   y = drawField(page, font, fontBold, y, 'Overall Assessment', assessment, { valueColour: assessColour })
   y -= 4
 
-  // ── Section F: Recommendations ─────────────────────────────
+  // Section F
   y = drawSectionHeader(page, fontBold, y, 'Section F — Recommendations')
   y = drawField(page, font, fontBold, y, 'Next Inspection Date', fmtDate(cert.recommendations?.nextInspectionDate))
   y = drawField(page, font, fontBold, y, 'Reason for Interval', fmt(cert.recommendations?.reasonForInterval))
 
-  // Remedial urgency — may wrap
   if (cert.recommendations?.remedialUrgency) {
-    const urgLines = wrapText(
-      cert.recommendations.remedialUrgency,
-      font,
-      FONT.value,
-      CONTENT_WIDTH - 10
-    )
-    page.drawText('Remedial Urgency', {
-      x: PAGE.marginLeft,
-      y,
-      size: FONT.label,
-      font,
-      color: COLOURS.muted,
-    })
+    const urgLines = wrapText(cert.recommendations.remedialUrgency, font, FONT.value, CONTENT_WIDTH - 10)
+    page.drawText('Remedial Urgency', { x: PAGE.marginLeft, y, size: FONT.label, font, color: COLOURS.muted })
     y -= 10
     for (const line of urgLines) {
-      page.drawText(line, {
-        x: PAGE.marginLeft + 4,
-        y,
-        size: FONT.value,
-        font: fontBold,
-        color: COLOURS.text,
-      })
+      page.drawText(line, { x: PAGE.marginLeft + 4, y, size: FONT.value, font: fontBold, color: COLOURS.text })
       y -= FONT.value * SPACING.lineHeight + 2
     }
   }
   y -= 4
 
-  // ── Section G: Declaration ─────────────────────────────────
+  // Section G
   y = drawSectionHeader(page, fontBold, y, 'Section G — Declaration')
 
-  // Declaration text
   const declText =
     'I/We, being the person(s) responsible for the inspection and testing of the ' +
     'electrical installation (as indicated by my/our signatures below), particulars ' +
@@ -356,18 +270,11 @@ function drawPage2(ctx: PDFContext, cert: Partial<EICRCertificate>, pageNum: num
 
   const declLines = wrapText(declText, font, FONT.value, CONTENT_WIDTH - 10)
   for (const line of declLines) {
-    page.drawText(line, {
-      x: PAGE.marginLeft + 4,
-      y,
-      size: FONT.value,
-      font,
-      color: COLOURS.text,
-    })
+    page.drawText(line, { x: PAGE.marginLeft + 4, y, size: FONT.value, font, color: COLOURS.text })
     y -= FONT.value * SPACING.lineHeight + 2
   }
   y -= 8
 
-  // Inspector details
   drawHorizontalRule(page, y + 4)
   y -= 4
   y = drawFieldPair(page, font, fontBold, y,
@@ -381,7 +288,7 @@ function drawPage2(ctx: PDFContext, cert: Partial<EICRCertificate>, pageNum: num
   y = drawField(page, font, fontBold, y, 'Company Address', fmt(cert.declaration?.companyAddress))
   y = drawField(page, font, fontBold, y, 'Date Inspected', fmtDate(cert.declaration?.dateInspected))
 
-  // Signature placeholder
+  // Signature placeholders
   y -= 6
   page.drawRectangle({
     x: PAGE.marginLeft,
@@ -392,11 +299,7 @@ function drawPage2(ctx: PDFContext, cert: Partial<EICRCertificate>, pageNum: num
     borderWidth: 0.5,
   })
   page.drawText('Inspector Signature', {
-    x: PAGE.marginLeft + 4,
-    y: y - 12,
-    size: FONT.label,
-    font,
-    color: COLOURS.muted,
+    x: PAGE.marginLeft + 4, y: y - 12, size: FONT.label, font, color: COLOURS.muted,
   })
 
   page.drawRectangle({
@@ -408,11 +311,7 @@ function drawPage2(ctx: PDFContext, cert: Partial<EICRCertificate>, pageNum: num
     borderWidth: 0.5,
   })
   page.drawText('Qualified Supervisor Signature', {
-    x: PAGE.marginLeft + CONTENT_WIDTH / 2 + 4,
-    y: y - 12,
-    size: FONT.label,
-    font,
-    color: COLOURS.muted,
+    x: PAGE.marginLeft + CONTENT_WIDTH / 2 + 4, y: y - 12, size: FONT.label, font, color: COLOURS.muted,
   })
 
   y -= 48
@@ -436,7 +335,7 @@ function drawPage3(ctx: PDFContext, cert: Partial<EICRCertificate>, pageNum: num
   const supply = cert.supplyCharacteristics
   const parts = cert.installationParticulars
 
-  // ── Section I: Supply Characteristics ──────────────────────
+  // Section I
   y = drawSectionHeader(page, fontBold, y, 'Section I — Supply Characteristics and Earthing Arrangements')
   y = drawFieldPair(page, font, fontBold, y,
     { label: 'Earthing System', value: fmtEarthing(supply?.earthingType) },
@@ -461,14 +360,12 @@ function drawPage3(ctx: PDFContext, cert: Partial<EICRCertificate>, pageNum: num
   y = drawField(page, font, fontBold, y, 'Supply Device Rating', supply?.supplyDeviceRating != null ? `${supply.supplyDeviceRating}A` : '—')
 
   if (supply?.otherSourcesPresent) {
-    y = drawField(page, font, fontBold, y, 'Other Sources', fmt(supply?.otherSourcesDescription, 'Present'))
+    y = drawField(page, font, fontBold, y, 'Other Sources', fmt(supply.otherSourcesDescription, 'Present'))
   }
   y -= 4
 
-  // ── Section J: Installation Particulars ────────────────────
+  // Section J
   y = drawSectionHeader(page, fontBold, y, 'Section J — Particulars of Installation at the Origin')
-
-  // Main switch
   y = drawFieldPair(page, font, fontBold, y,
     { label: 'Main Switch Location', value: fmt(parts?.mainSwitchLocation) },
     { label: 'Main Switch BS(EN)', value: fmt(parts?.mainSwitchBsEn) }
@@ -482,7 +379,6 @@ function drawPage3(ctx: PDFContext, cert: Partial<EICRCertificate>, pageNum: num
     { label: 'Voltage Rating', value: parts?.mainSwitchVoltageRating != null ? `${parts.mainSwitchVoltageRating}V` : '—' }
   )
 
-  // Main switch RCD (if present)
   if (parts?.mainSwitchRcdType) {
     y = drawFieldPair(page, font, fontBold, y,
       { label: 'Main RCD Type', value: fmt(parts.mainSwitchRcdType) },
@@ -494,7 +390,6 @@ function drawPage3(ctx: PDFContext, cert: Partial<EICRCertificate>, pageNum: num
   drawHorizontalRule(page, y + 4)
   y -= 4
 
-  // Earthing arrangements
   y = drawFieldPair(page, font, fontBold, y,
     { label: 'Distributor Facility', value: fmtBool(parts?.distributorFacility) },
     { label: 'Installation Electrode', value: fmtBool(parts?.installationElectrode) }
@@ -507,14 +402,12 @@ function drawPage3(ctx: PDFContext, cert: Partial<EICRCertificate>, pageNum: num
     )
   }
 
-  // Earthing conductor
   y = drawFieldPair(page, font, fontBold, y,
     { label: 'Earthing Cond. Material', value: fmt(parts?.earthingConductorMaterial) },
     { label: 'Earthing Cond. CSA', value: parts?.earthingConductorCsa != null ? `${parts.earthingConductorCsa}mm²` : '—' }
   )
   y = drawField(page, font, fontBold, y, 'Earthing Cond. Verified', fmtBool(parts?.earthingConductorVerified))
 
-  // Main bonding
   y = drawFieldPair(page, font, fontBold, y,
     { label: 'Bonding Cond. Material', value: fmt(parts?.bondingConductorMaterial) },
     { label: 'Bonding Cond. CSA', value: parts?.bondingConductorCsa != null ? `${parts.bondingConductorCsa}mm²` : '—' }
@@ -525,13 +418,8 @@ function drawPage3(ctx: PDFContext, cert: Partial<EICRCertificate>, pageNum: num
   drawHorizontalRule(page, y + 4)
   y -= 4
 
-  // Bonding of extraneous conductive parts
   page.drawText('Bonding of Extraneous-Conductive-Parts', {
-    x: PAGE.marginLeft,
-    y,
-    size: FONT.label,
-    font,
-    color: COLOURS.muted,
+    x: PAGE.marginLeft, y, size: FONT.label, font, color: COLOURS.muted,
   })
   y -= 12
   y = drawFieldPair(page, font, fontBold, y,
@@ -582,8 +470,8 @@ function drawObservationsPages(
 
   for (let i = 0; i < observations.length; i++) {
     const obs = observations[i]
+    if (!obs) continue
 
-    // Check if we need a new page
     if (needsNewPage(y, SPACING.tableRowHeight + 4)) {
       drawPageFooter(page, ctx.font)
       pageNum++
@@ -618,19 +506,15 @@ function drawObservationsPages(
   y -= 10
   if (!needsNewPage(y, 30)) {
     const counts: Record<ClassificationCode, number> = { C1: 0, C2: 0, C3: 0, FI: 0 }
-    observations.forEach((o) => {
+    for (const o of observations) {
       if (o.classificationCode && counts[o.classificationCode] !== undefined) {
         counts[o.classificationCode]++
       }
-    })
+    }
 
     const summaryText = `C1: ${counts.C1}  ·  C2: ${counts.C2}  ·  C3: ${counts.C3}  ·  FI: ${counts.FI}  ·  Total: ${observations.length}`
     page.drawText(summaryText, {
-      x: PAGE.marginLeft,
-      y,
-      size: FONT.value,
-      font: ctx.fontBold,
-      color: COLOURS.text,
+      x: PAGE.marginLeft, y, size: FONT.value, font: ctx.fontBold, color: COLOURS.text,
     })
   }
 
@@ -667,6 +551,7 @@ function drawChecklistPages(
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i]
+    if (!item) continue
 
     // Section divider row
     if (item.section !== currentSection) {
@@ -682,7 +567,6 @@ function drawChecklistPages(
         y = drawTableHeader(page, ctx.fontBold, y, columns)
       }
 
-      // Section header row
       const sectionRowY = y - SPACING.tableRowHeight
       page.drawRectangle({
         x: PAGE.marginLeft,
@@ -701,7 +585,6 @@ function drawChecklistPages(
       y = sectionRowY
     }
 
-    // Check page space
     if (needsNewPage(y, SPACING.tableRowHeight + 4)) {
       drawPageFooter(page, ctx.font)
       pageNum++
@@ -712,19 +595,11 @@ function drawChecklistPages(
       y = drawTableHeader(page, ctx.fontBold, y, columns)
     }
 
-    // Outcome formatting
     let outcomeText = '—'
     let outcomeColour = COLOURS.text
     if (item.outcome) {
       const outcomeMap: Record<string, string> = {
-        PASS: '✓',
-        C1: 'C1',
-        C2: 'C2',
-        C3: 'C3',
-        FI: 'FI',
-        NV: 'N/V',
-        LIM: 'LIM',
-        NA: 'N/A',
+        PASS: '✓', C1: 'C1', C2: 'C2', C3: 'C3', FI: 'FI', NV: 'N/V', LIM: 'LIM', NA: 'N/A',
       }
       outcomeText = outcomeMap[item.outcome] ?? item.outcome
       if (item.outcome === 'PASS') outcomeColour = COLOURS.pass
@@ -760,14 +635,6 @@ function drawChecklistPages(
 // DYNAMIC PAGES: CIRCUIT TEST RESULTS
 // ============================================================
 
-/**
- * The circuit schedule has 31 columns per BS 7671 Appendix 6.
- * We split across two rows per circuit to fit A4 width:
- *   Row A: Circuit identity + protective device + cable (cols 1-16)
- *   Row B: Test results (cols 17-31)
- *
- * Each distribution board gets its own header block.
- */
 function drawCircuitPages(
   ctx: PDFContext,
   cert: Partial<EICRCertificate>,
@@ -786,7 +653,6 @@ function drawCircuitPages(
 
     let { page, y } = addPage(ctx, pageNum, totalPages)
 
-    // Board header
     y = drawSectionHeader(
       page,
       ctx.fontBold,
@@ -794,7 +660,6 @@ function drawCircuitPages(
       `Schedule of Circuit Details and Test Results — ${board.dbReference} (${board.dbLocation || 'No location'})`
     )
 
-    // Board metadata
     if (board.zsAtDb != null || board.ipfAtDb != null) {
       const meta = [
         board.zsAtDb != null ? `Zs at DB: ${board.zsAtDb}Ω` : '',
@@ -805,16 +670,12 @@ function drawCircuitPages(
         .join('  ·  ')
 
       page.drawText(meta, {
-        x: PAGE.marginLeft,
-        y,
-        size: FONT.small,
-        font: ctx.font,
-        color: COLOURS.muted,
+        x: PAGE.marginLeft, y, size: FONT.small, font: ctx.font, color: COLOURS.muted,
       })
       y -= 12
     }
 
-    // === Row A: Circuit Identity columns ===
+    // Row A: Circuit Identity columns
     const colsA = [
       { label: 'Cct', width: 28, align: 'center' as const },
       { label: 'Description', width: 100, align: 'left' as const },
@@ -832,7 +693,7 @@ function drawCircuitPages(
       { label: 'Meas Zs', width: CONTENT_WIDTH - 427, align: 'center' as const },
     ]
 
-    // === Row B: Test Results columns ===
+    // Row B: Test Results columns
     const colsB = [
       { label: 'r1', width: 35, align: 'center' as const },
       { label: 'rn', width: 35, align: 'center' as const },
@@ -851,6 +712,7 @@ function drawCircuitPages(
 
     for (let i = 0; i < boardCircuits.length; i++) {
       const c = boardCircuits[i]
+      if (!c) continue
 
       // Need space for 2 rows (A + B header + B row)
       const neededHeight = SPACING.tableRowHeight * 3 + SPACING.tableHeaderHeight + 8
@@ -882,7 +744,7 @@ function drawCircuitPages(
         c.zs != null ? c.zs.toFixed(2) : '—',
       ], { isAlt: i % 2 === 1 })
 
-      // Row B header + values (indented under Row A)
+      // Row B header + values
       y = drawTableHeader(page, ctx.fontBold, y, colsB)
 
       y = drawTableRow(page, ctx.font, y, colsB, [
@@ -899,7 +761,6 @@ function drawCircuitPages(
         fmt(c.remarks),
       ], { isAlt: i % 2 === 1 })
 
-      // Small gap between circuits
       y -= 4
     }
 
@@ -916,25 +777,16 @@ function drawCircuitPages(
 // ============================================================
 
 function estimateTotalPages(cert: Partial<EICRCertificate>): number {
-  let pages = 3 // Fixed pages 1-3
+  let pages = 3
 
-  // Observations: ~35 rows per page
   const obsCount = cert.observations?.length ?? 0
-  if (obsCount > 0) {
-    pages += Math.ceil(obsCount / 35)
-  }
+  if (obsCount > 0) pages += Math.ceil(obsCount / 35)
 
-  // Checklist: ~40 items per page
   const checklistCount = cert.inspectionSchedule?.length ?? 0
-  if (checklistCount > 0) {
-    pages += Math.ceil(checklistCount / 40)
-  }
+  if (checklistCount > 0) pages += Math.ceil(checklistCount / 40)
 
-  // Circuits: ~8 circuits per page (2 rows each)
   const circuitCount = cert.circuits?.length ?? 0
-  if (circuitCount > 0) {
-    pages += Math.ceil(circuitCount / 8)
-  }
+  if (circuitCount > 0) pages += Math.ceil(circuitCount / 8)
 
   return Math.max(pages, 3)
 }
@@ -945,15 +797,11 @@ function estimateTotalPages(cert: Partial<EICRCertificate>): number {
 
 /**
  * Generate a complete EICR PDF from certificate data.
- * Returns a Uint8Array of the PDF bytes — ready for download or upload.
- *
- * @param cert - Complete or partial EICR certificate data
- * @returns PDF bytes
+ * Returns a Uint8Array of the PDF bytes.
  */
 export async function generateEICRPdf(cert: Partial<EICRCertificate>): Promise<Uint8Array> {
   const doc = await PDFDocument.create()
 
-  // Embed standard fonts (no external font files needed)
   const font = await doc.embedFont(StandardFonts.Helvetica)
   const fontBold = await doc.embedFont(StandardFonts.HelveticaBold)
 
@@ -962,30 +810,27 @@ export async function generateEICRPdf(cert: Partial<EICRCertificate>): Promise<U
 
   const ctx: PDFContext = { doc, font, fontBold, reportNumber, pages: [] }
 
-  // ── Fixed pages ────────────────────────────────────────────
+  // Fixed pages
   drawPage1(ctx, cert, 1, totalPages)
   drawPage2(ctx, cert, 2, totalPages)
   drawPage3(ctx, cert, 3, totalPages)
 
-  // ── Dynamic pages ──────────────────────────────────────────
+  // Dynamic pages
   let nextPage = 4
 
-  // Observations
   if ((cert.observations?.length ?? 0) > 0) {
     nextPage = drawObservationsPages(ctx, cert.observations!, nextPage, totalPages) + 1
   }
 
-  // Inspection checklist
   if ((cert.inspectionSchedule?.length ?? 0) > 0) {
     nextPage = drawChecklistPages(ctx, cert.inspectionSchedule!, nextPage, totalPages) + 1
   }
 
-  // Circuit test results
   if ((cert.circuits?.length ?? 0) > 0) {
     drawCircuitPages(ctx, cert, nextPage, totalPages)
   }
 
-  // ── Metadata ───────────────────────────────────────────────
+  // Metadata
   doc.setTitle(`EICR ${reportNumber}`)
   doc.setAuthor(cert.declaration?.inspectorName ?? 'CertVoice')
   doc.setSubject('Electrical Installation Condition Report')
@@ -998,16 +843,18 @@ export async function generateEICRPdf(cert: Partial<EICRCertificate>): Promise<U
 
 /**
  * Generate and trigger browser download of the EICR PDF.
- *
- * @param cert - Complete or partial EICR certificate data
- * @param filename - Optional filename (defaults to report number)
  */
 export async function downloadEICRPdf(
   cert: Partial<EICRCertificate>,
   filename?: string
 ): Promise<void> {
   const bytes = await generateEICRPdf(cert)
-  const blob = new Blob([bytes], { type: 'application/pdf' })
+
+  // Copy into a plain ArrayBuffer to satisfy strict BlobPart typing
+  const buffer = new ArrayBuffer(bytes.byteLength)
+  new Uint8Array(buffer).set(bytes)
+
+  const blob = new Blob([buffer], { type: 'application/pdf' })
   const url = URL.createObjectURL(blob)
 
   const reportNum = cert.reportNumber ?? 'DRAFT'
@@ -1020,6 +867,5 @@ export async function downloadEICRPdf(
   link.click()
   document.body.removeChild(link)
 
-  // Clean up blob URL after short delay
   setTimeout(() => URL.revokeObjectURL(url), 5000)
 }
