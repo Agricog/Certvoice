@@ -4,6 +4,11 @@
  * Cloudflare Worker that generates BS 7671:2018+A2:2022 compliant
  * A4 EICR PDFs from EICRCertificate JSON data.
  *
+ * Section order matches IET Appendix 6 model forms:
+ *   Cover (A–D) → Summary (E–G) → Section H (Inspection Summary)
+ *   → Supply (I–J) → Observations (K) → Photos → Inspection Schedule
+ *   → Circuit Schedule → Guidance
+ *
  * Uses pdf-lib (V8 isolate compatible, no Node.js APIs).
  *
  * Guard: requestId, structured logs, JWT auth, safety switches per Build Standard v3.
@@ -443,6 +448,7 @@ const COLOURS = {
   rowAlt: rgb(0.95, 0.95, 0.97),
   satisfactory: rgb(0.1, 0.55, 0.1),
   unsatisfactory: rgb(0.8, 0.1, 0.1),
+  groupHeaderBg: rgb(0.22, 0.22, 0.30),
 } as const
 
 const FONT_SIZE = {
@@ -457,7 +463,7 @@ const FONT_SIZE = {
 } as const
 
 const COMPLIANCE_STATEMENT =
-  'This form is based on the model shown in Appendix 6 of BS 7671:2018+A2:2022'
+  'This report is based on the model forms shown in Appendix 6 of BS 7671:2018+A2:2022'
 
 const VALIDITY_NOTICE =
   'This report is valid only when accompanied by the attached Schedule of Inspections and Schedule of Circuit Details and Test Results.'
@@ -550,13 +556,6 @@ function ensureSpace(ctx: DrawContext, needed: number, landscape: boolean = fals
 // HELPER: Fetch and embed signature PNG from R2
 // ============================================================
 
-/**
- * Fetch a signature PNG from R2 by storage key and embed it into the PDF.
- * Draws the image at the specified position, scaled to fit the box.
- * Falls back to a grey placeholder box if the fetch or embed fails.
- *
- * @returns true if signature was embedded, false if placeholder was drawn
- */
 async function embedSignature(
   ctx: DrawContext,
   signatureKey: string | null,
@@ -565,14 +564,12 @@ async function embedSignature(
   boxWidth: number,
   boxHeight: number
 ): Promise<boolean> {
-  // No key — draw placeholder
   if (!signatureKey) {
     drawRect(ctx.currentPage, x, y, boxWidth, boxHeight, COLOURS.rowAlt, COLOURS.lightGrey)
     return false
   }
 
   try {
-    // Fetch PNG bytes from R2 via the STORAGE_BUCKET binding
     const object = await ctx.env.STORAGE_BUCKET.get(signatureKey)
     if (!object) {
       drawRect(ctx.currentPage, x, y, boxWidth, boxHeight, COLOURS.rowAlt, COLOURS.lightGrey)
@@ -581,20 +578,17 @@ async function embedSignature(
 
     const bytes = new Uint8Array(await object.arrayBuffer())
 
-    // Determine image type from content-type or key extension
     const contentType = object.httpMetadata?.contentType ?? ''
     const isPng = contentType.includes('png') || signatureKey.endsWith('.png')
     const isJpeg = contentType.includes('jpeg') || contentType.includes('jpg') ||
                    signatureKey.endsWith('.jpg') || signatureKey.endsWith('.jpeg')
 
-    // Embed into PDF document
     const image = isPng
       ? await ctx.doc.embedPng(bytes)
       : isJpeg
         ? await ctx.doc.embedJpg(bytes)
-        : await ctx.doc.embedPng(bytes) // Default to PNG (SignatureCapture exports PNG)
+        : await ctx.doc.embedPng(bytes)
 
-    // Scale image to fit within the box while preserving aspect ratio
     const imgDims = image.scale(1)
     const scaleX = boxWidth / imgDims.width
     const scaleY = boxHeight / imgDims.height
@@ -603,11 +597,9 @@ async function embedSignature(
     const drawWidth = imgDims.width * scale
     const drawHeight = imgDims.height * scale
 
-    // Centre the image within the box
     const offsetX = x + (boxWidth - drawWidth) / 2
     const offsetY = y + (boxHeight - drawHeight) / 2
 
-    // Draw a white background behind the signature for clean rendering
     drawRect(ctx.currentPage, x, y, boxWidth, boxHeight, COLOURS.white, COLOURS.lightGrey)
 
     ctx.currentPage.drawImage(image, {
@@ -619,7 +611,6 @@ async function embedSignature(
 
     return true
   } catch {
-    // Any failure — fall back to placeholder
     drawRect(ctx.currentPage, x, y, boxWidth, boxHeight, COLOURS.rowAlt, COLOURS.lightGrey)
     return false
   }
@@ -897,6 +888,16 @@ function outcomeDisplay(outcome: InspectionOutcome | null): string {
   return map[outcome] ?? outcome
 }
 
+function outcomeColour(outcome: InspectionOutcome | null): RGB {
+  if (!outcome) return COLOURS.midGrey
+  if (outcome === 'PASS') return COLOURS.green
+  if (outcome === 'C1') return COLOURS.c1Red
+  if (outcome === 'C2') return COLOURS.c2Amber
+  if (outcome === 'C3') return COLOURS.c3Blue
+  if (outcome === 'FI') return COLOURS.fiPurple
+  return COLOURS.black
+}
+
 // ============================================================
 // PAGE HEADERS & FOOTERS (applied after all pages created)
 // ============================================================
@@ -1088,7 +1089,7 @@ async function renderSummaryPage(ctx: DrawContext, cert: EICRCertificate): Promi
     ])
     ctx.y -= 6
 
-    // Inspector signature — fetch from R2 and embed, or draw placeholder
+    // Inspector signature
     drawText(ctx.currentPage, 'Inspector Signature:', MARGIN.left, ctx.y, ctx.fontBold, FONT_SIZE.label, COLOURS.midGrey)
     const inspSigX = MARGIN.left + 110
     const inspSigY = ctx.y - 4
@@ -1100,7 +1101,7 @@ async function renderSummaryPage(ctx: DrawContext, cert: EICRCertificate): Promi
       { label: 'QS Date:', value: formatDate(d.qsDate), width: CONTENT_WIDTH / 2, labelWidth: 90 },
     ])
 
-    // QS signature — fetch from R2 and embed, or draw placeholder
+    // QS signature
     drawText(ctx.currentPage, 'QS Signature:', MARGIN.left, ctx.y, ctx.fontBold, FONT_SIZE.label, COLOURS.midGrey)
     const qsSigX = MARGIN.left + 110
     const qsSigY = ctx.y - 4
@@ -1111,6 +1112,162 @@ async function renderSummaryPage(ctx: DrawContext, cert: EICRCertificate): Promi
     ctx.y -= 14
   }
 }
+
+// ============================================================
+// SECTION H — Summary of the Inspection (IET Appendix 6)
+//
+// Aggregates inspection schedule outcomes by section into a
+// summary table. Scheme bodies (NICEIC, NAPIT) expect this
+// between Declaration (G) and Supply (I).
+// ============================================================
+
+function renderInspectionSummary(ctx: DrawContext, cert: EICRCertificate): void {
+  createPage(ctx)
+  drawSectionHeader(ctx, 'Section H — Summary of the Inspection')
+  ctx.y -= 4
+
+  const items = cert.inspectionSchedule ?? []
+  if (items.length === 0) {
+    drawText(ctx.currentPage, 'No inspection items recorded.', MARGIN.left + 4, ctx.y, ctx.font, FONT_SIZE.body, COLOURS.midGrey)
+    ctx.y -= 14
+    return
+  }
+
+  // Group items by section number
+  const sectionMap = new Map<number, { title: string; items: InspectionItem[] }>()
+  for (const item of items) {
+    if (!sectionMap.has(item.section)) {
+      sectionMap.set(item.section, { title: item.sectionTitle, items: [] })
+    }
+    sectionMap.get(item.section)!.items.push(item)
+  }
+
+  // Outcome columns matching IET model form
+  const outcomeTypes: InspectionOutcome[] = ['PASS', 'C1', 'C2', 'C3', 'FI', 'NV', 'LIM', 'NA']
+  const outcomeLabels: Record<string, string> = {
+    PASS: '✓', C1: 'C1', C2: 'C2', C3: 'C3', FI: 'FI', NV: 'N/V', LIM: 'LIM', NA: 'N/A',
+  }
+
+  // Table layout
+  const sectionColW = 35
+  const titleColW = 175
+  const totalColW = 35
+  const outcomeColW = Math.floor((CONTENT_WIDTH - sectionColW - titleColW - totalColW) / outcomeTypes.length)
+  const rowH = 14
+
+  // --- Table header ---
+  function drawSummaryHeader(): void {
+    let x = MARGIN.left
+    drawRect(ctx.currentPage, MARGIN.left, ctx.y - rowH, CONTENT_WIDTH, rowH, COLOURS.headerBg)
+
+    drawText(ctx.currentPage, 'Section', x + 2, ctx.y - rowH + 4, ctx.fontBold, FONT_SIZE.tiny, COLOURS.headerText)
+    x += sectionColW
+
+    drawText(ctx.currentPage, 'Description', x + 2, ctx.y - rowH + 4, ctx.fontBold, FONT_SIZE.tiny, COLOURS.headerText)
+    x += titleColW
+
+    for (const oc of outcomeTypes) {
+      drawText(ctx.currentPage, outcomeLabels[oc], x + 2, ctx.y - rowH + 4, ctx.fontBold, FONT_SIZE.tiny, COLOURS.headerText)
+      x += outcomeColW
+    }
+
+    drawText(ctx.currentPage, 'Total', x + 2, ctx.y - rowH + 4, ctx.fontBold, FONT_SIZE.tiny, COLOURS.headerText)
+    ctx.y -= rowH
+  }
+
+  drawSummaryHeader()
+
+  // Grand totals
+  const grandTotals: Record<string, number> = {}
+  outcomeTypes.forEach((o) => { grandTotals[o] = 0 })
+  let grandItemCount = 0
+
+  // --- Section rows ---
+  let rowIdx = 0
+  for (const [sectionNum, sectionData] of sectionMap) {
+    ensureSpace(ctx, rowH + 2)
+    if (ctx.y > A4_HEIGHT - MARGIN.top - 10) {
+      drawSummaryHeader()
+    }
+
+    if (rowIdx % 2 === 1) {
+      drawRect(ctx.currentPage, MARGIN.left, ctx.y - rowH, CONTENT_WIDTH, rowH, COLOURS.rowAlt)
+    }
+
+    // Count outcomes for this section
+    const counts: Record<string, number> = {}
+    outcomeTypes.forEach((o) => { counts[o] = 0 })
+
+    for (const item of sectionData.items) {
+      if (item.outcome && counts[item.outcome] !== undefined) {
+        counts[item.outcome]++
+        grandTotals[item.outcome]++
+      }
+    }
+
+    const sectionTotal = sectionData.items.length
+    grandItemCount += sectionTotal
+
+    let x = MARGIN.left
+    drawText(ctx.currentPage, String(sectionNum), x + 2, ctx.y - rowH + 4, ctx.fontBold, FONT_SIZE.tiny, COLOURS.black)
+    x += sectionColW
+
+    drawText(ctx.currentPage, sectionData.title, x + 2, ctx.y - rowH + 4, ctx.font, FONT_SIZE.tiny, COLOURS.black, titleColW - 4)
+    x += titleColW
+
+    for (const oc of outcomeTypes) {
+      const count = counts[oc] ?? 0
+      const colour = count > 0 ? outcomeColour(oc as InspectionOutcome) : COLOURS.midGrey
+      const f = count > 0 ? ctx.fontBold : ctx.font
+      drawText(ctx.currentPage, count > 0 ? String(count) : '—', x + 2, ctx.y - rowH + 4, f, FONT_SIZE.tiny, colour)
+      x += outcomeColW
+    }
+
+    drawText(ctx.currentPage, String(sectionTotal), x + 2, ctx.y - rowH + 4, ctx.font, FONT_SIZE.tiny, COLOURS.black)
+
+    ctx.y -= rowH
+    rowIdx++
+  }
+
+  // --- Totals row ---
+  ensureSpace(ctx, rowH + 2)
+  drawRect(ctx.currentPage, MARGIN.left, ctx.y - rowH, CONTENT_WIDTH, rowH, COLOURS.headerBg)
+
+  let x = MARGIN.left
+  drawText(ctx.currentPage, '', x + 2, ctx.y - rowH + 4, ctx.fontBold, FONT_SIZE.tiny, COLOURS.headerText)
+  x += sectionColW
+  drawText(ctx.currentPage, 'TOTALS', x + 2, ctx.y - rowH + 4, ctx.fontBold, FONT_SIZE.tiny, COLOURS.headerText)
+  x += titleColW
+
+  for (const oc of outcomeTypes) {
+    const count = grandTotals[oc] ?? 0
+    drawText(ctx.currentPage, count > 0 ? String(count) : '—', x + 2, ctx.y - rowH + 4, ctx.fontBold, FONT_SIZE.tiny, COLOURS.headerText)
+    x += outcomeColW
+  }
+
+  drawText(ctx.currentPage, String(grandItemCount), x + 2, ctx.y - rowH + 4, ctx.fontBold, FONT_SIZE.tiny, COLOURS.headerText)
+  ctx.y -= rowH
+
+  // Items not inspected count
+  const notInspected = items.filter((i) => i.outcome === null).length
+  if (notInspected > 0) {
+    ctx.y -= 6
+    drawText(
+      ctx.currentPage,
+      `${notInspected} item${notInspected !== 1 ? 's' : ''} not yet inspected.`,
+      MARGIN.left + 4,
+      ctx.y,
+      ctx.font,
+      FONT_SIZE.small,
+      COLOURS.midGrey
+    )
+    ctx.y -= 12
+  }
+}
+
+// ============================================================
+// SECTION I + J — Supply Characteristics & Installation Particulars
+// ============================================================
 
 function renderSupplyPage(ctx: DrawContext, cert: EICRCertificate): void {
   createPage(ctx)
@@ -1151,7 +1308,6 @@ function renderSupplyPage(ctx: DrawContext, cert: EICRCertificate): void {
   drawSectionHeader(ctx, 'Section J — Particulars of the Installation at the Origin')
   const p = cert.installationParticulars
   if (p) {
-    // Means of earthing
     drawText(ctx.currentPage, 'Means of Earthing', MARGIN.left, ctx.y, ctx.fontBold, FONT_SIZE.label, COLOURS.accent)
     ctx.y -= 12
     drawFieldRow(ctx, [
@@ -1167,7 +1323,6 @@ function renderSupplyPage(ctx: DrawContext, cert: EICRCertificate): void {
     }
     ctx.y -= 4
 
-    // Main switch
     drawText(ctx.currentPage, 'Main Switch / Switch-Fuse', MARGIN.left, ctx.y, ctx.fontBold, FONT_SIZE.label, COLOURS.accent)
     ctx.y -= 12
     drawFieldRow(ctx, [
@@ -1182,7 +1337,6 @@ function renderSupplyPage(ctx: DrawContext, cert: EICRCertificate): void {
     ])
     ctx.y -= 4
 
-    // Earthing conductor
     drawText(ctx.currentPage, 'Earthing Conductor', MARGIN.left, ctx.y, ctx.fontBold, FONT_SIZE.label, COLOURS.accent)
     ctx.y -= 12
     drawFieldRow(ctx, [
@@ -1191,7 +1345,6 @@ function renderSupplyPage(ctx: DrawContext, cert: EICRCertificate): void {
       { label: 'Verified:', value: yesNo(p.earthingConductorVerified), width: CONTENT_WIDTH / 3, labelWidth: 60 },
     ])
 
-    // Bonding conductor
     drawText(ctx.currentPage, 'Main Protective Bonding', MARGIN.left, ctx.y, ctx.fontBold, FONT_SIZE.label, COLOURS.accent)
     ctx.y -= 12
     drawFieldRow(ctx, [
@@ -1200,7 +1353,6 @@ function renderSupplyPage(ctx: DrawContext, cert: EICRCertificate): void {
       { label: 'Verified:', value: yesNo(p.bondingConductorVerified), width: CONTENT_WIDTH / 3, labelWidth: 60 },
     ])
 
-    // Bonding connections
     drawText(ctx.currentPage, 'Bonding of Extraneous-Conductive-Parts', MARGIN.left, ctx.y, ctx.fontBold, FONT_SIZE.label, COLOURS.accent)
     ctx.y -= 12
     drawFieldRow(ctx, [
@@ -1215,6 +1367,10 @@ function renderSupplyPage(ctx: DrawContext, cert: EICRCertificate): void {
     ])
   }
 }
+
+// ============================================================
+// SECTION K — Observations and Recommendations
+// ============================================================
 
 function renderObservationsPage(ctx: DrawContext, cert: EICRCertificate): void {
   createPage(ctx)
@@ -1286,6 +1442,10 @@ function renderObservationsPage(ctx: DrawContext, cert: EICRCertificate): void {
   })
 }
 
+// ============================================================
+// SCHEDULE OF INSPECTIONS (IET Appendix 6 labels)
+// ============================================================
+
 function renderInspectionSchedule(ctx: DrawContext, cert: EICRCertificate): void {
   createPage(ctx)
   drawSectionHeader(ctx, 'Schedule of Inspections')
@@ -1295,8 +1455,9 @@ function renderInspectionSchedule(ctx: DrawContext, cert: EICRCertificate): void
     return
   }
 
+  // IET Appendix 6 column labels
   const colWidths = [35, 200, 120, 45, CONTENT_WIDTH - 400]
-  const headers = ['Ref', 'Description', 'Regulation', 'Result', 'Notes']
+  const headers = ['Item No.', 'Description of Inspection', 'Regulation', 'Outcome', 'Comments']
   const rowH = 12
 
   function drawScheduleHeader(): void {
@@ -1319,7 +1480,6 @@ function renderInspectionSchedule(ctx: DrawContext, cert: EICRCertificate): void
       ensureSpace(ctx, rowH * 2 + 4)
       lastSection = item.section
 
-      // Section title row
       drawRect(ctx.currentPage, MARGIN.left, ctx.y - rowH, CONTENT_WIDTH, rowH, rgb(0.9, 0.92, 0.96))
       drawText(ctx.currentPage, `Section ${item.section}: ${item.sectionTitle}`, MARGIN.left + 4, ctx.y - rowH + 3, ctx.fontBold, FONT_SIZE.small, COLOURS.accent)
       ctx.y -= rowH
@@ -1338,10 +1498,7 @@ function renderInspectionSchedule(ctx: DrawContext, cert: EICRCertificate): void
     }
 
     const outcome = outcomeDisplay(item.outcome)
-    let outcomeColour = COLOURS.black
-    if (item.outcome === 'PASS') outcomeColour = COLOURS.green
-    else if (item.outcome === 'C1') outcomeColour = COLOURS.c1Red
-    else if (item.outcome === 'C2') outcomeColour = COLOURS.c2Amber
+    const oColour = outcomeColour(item.outcome)
 
     let x = MARGIN.left
     drawText(ctx.currentPage, item.itemRef, x + 2, ctx.y - rowH + 3, ctx.font, FONT_SIZE.tiny, COLOURS.black)
@@ -1350,11 +1507,118 @@ function renderInspectionSchedule(ctx: DrawContext, cert: EICRCertificate): void
     x += colWidths[1]
     drawText(ctx.currentPage, item.regulationRef, x + 2, ctx.y - rowH + 3, ctx.font, FONT_SIZE.tiny, COLOURS.midGrey)
     x += colWidths[2]
-    drawText(ctx.currentPage, outcome, x + 2, ctx.y - rowH + 3, ctx.fontBold, FONT_SIZE.tiny, outcomeColour)
+    drawText(ctx.currentPage, outcome, x + 2, ctx.y - rowH + 3, ctx.fontBold, FONT_SIZE.tiny, oColour)
     x += colWidths[3]
     drawText(ctx.currentPage, item.notes, x + 2, ctx.y - rowH + 3, ctx.font, FONT_SIZE.tiny, COLOURS.black, colWidths[4] - 4)
     ctx.y -= rowH
   }
+}
+
+// ============================================================
+// SCHEDULE OF CIRCUIT DETAILS AND TEST RESULTS
+//
+// Two-row grouped headers matching IET Appendix 6 model form:
+//   Row 1 (group): Circuit Details | OCPD | RCD/RCBO | Continuity | IR | Polarity | EFLI | RCD | AFDD |
+//   Row 2 (column): individual column labels
+//
+// Column order follows IET: Polarity before Earth Fault Loop Impedance
+// ============================================================
+
+/** Column definition with group assignment for two-row header rendering */
+interface CircuitColumn {
+  header: string
+  width: number
+  group: string
+}
+
+/**
+ * Build column definitions for the circuit schedule.
+ * Widths are tuned for landscape A4 (762pt content width).
+ * Group names match IET Appendix 6 sub-headings.
+ */
+function buildCircuitColumns(contentW: number): CircuitColumn[] {
+  const cols: CircuitColumn[] = [
+    // Circuit Details (8 cols)
+    { header: 'Cct No.',       width: 24,  group: 'Circuit Details' },
+    { header: 'Description',   width: 58,  group: 'Circuit Details' },
+    { header: 'Wiring',        width: 20,  group: 'Circuit Details' },
+    { header: 'Ref',           width: 16,  group: 'Circuit Details' },
+    { header: 'Points',        width: 20,  group: 'Circuit Details' },
+    { header: 'Live mm²',     width: 24,  group: 'Circuit Details' },
+    { header: 'CPC mm²',      width: 24,  group: 'Circuit Details' },
+    { header: 'tmax (s)',      width: 22,  group: 'Circuit Details' },
+    // Overcurrent Protective Device (5 cols)
+    { header: 'BS(EN)',        width: 24,  group: 'Overcurrent Protective Device' },
+    { header: 'Type',          width: 16,  group: 'Overcurrent Protective Device' },
+    { header: 'In (A)',        width: 20,  group: 'Overcurrent Protective Device' },
+    { header: 'Max Zs',        width: 26,  group: 'Overcurrent Protective Device' },
+    { header: 'Icn (kA)',      width: 22,  group: 'Overcurrent Protective Device' },
+    // RCD / RCBO (3 cols)
+    { header: 'BS(EN)',        width: 24,  group: 'RCD / RCBO' },
+    { header: 'Type',          width: 20,  group: 'RCD / RCBO' },
+    { header: 'IΔn (mA)',    width: 24,  group: 'RCD / RCBO' },
+    // Continuity (6 cols)
+    { header: 'r1 (Ω)',       width: 22,  group: 'Continuity' },
+    { header: 'rn (Ω)',       width: 22,  group: 'Continuity' },
+    { header: 'r2 (Ω)',       width: 22,  group: 'Continuity' },
+    { header: 'R1+R2 (Ω)',   width: 26,  group: 'Continuity' },
+    { header: 'R1+R2/R2',     width: 26,  group: 'Continuity' },
+    { header: 'R2 (Ω)',       width: 22,  group: 'Continuity' },
+    // Insulation Resistance (3 cols)
+    { header: 'V (V)',         width: 18,  group: 'Insulation Resistance' },
+    { header: 'L/L (MΩ)',    width: 24,  group: 'Insulation Resistance' },
+    { header: 'L/E (MΩ)',    width: 24,  group: 'Insulation Resistance' },
+    // Polarity (1 col) — IET order: Polarity before EFLI
+    { header: 'Polarity',      width: 22,  group: 'Polarity' },
+    // Earth Fault Loop Impedance (1 col)
+    { header: 'Zs (Ω)',       width: 24,  group: 'Earth Fault Loop Impedance' },
+    // RCD Test (2 cols)
+    { header: 't (ms)',        width: 22,  group: 'RCD Test' },
+    { header: 'Test Btn',      width: 22,  group: 'RCD Test' },
+    // AFDD (1 col)
+    { header: 'AFDD Btn',      width: 22,  group: 'AFDD' },
+    // Remarks (auto-width)
+    { header: 'Remarks',       width: 0,   group: '' },
+  ]
+
+  // Calculate remaining width for Remarks
+  const usedWidth = cols.slice(0, -1).reduce((sum, c) => sum + c.width, 0)
+  cols[cols.length - 1].width = Math.max(40, contentW - usedWidth)
+
+  return cols
+}
+
+/**
+ * Compute group spans from ordered column list.
+ * Returns array of { label, startX, spanWidth } for the group header row.
+ */
+function computeGroupSpans(
+  cols: CircuitColumn[],
+  startX: number
+): Array<{ label: string; x: number; width: number }> {
+  const spans: Array<{ label: string; x: number; width: number }> = []
+  let currentGroup = ''
+  let groupX = startX
+  let groupW = 0
+
+  for (const col of cols) {
+    if (col.group !== currentGroup) {
+      if (currentGroup) {
+        spans.push({ label: currentGroup, x: groupX, width: groupW })
+      }
+      currentGroup = col.group
+      groupX = groupX + groupW
+      groupW = col.width
+    } else {
+      groupW += col.width
+    }
+  }
+  // Push last group
+  if (currentGroup) {
+    spans.push({ label: currentGroup, x: groupX, width: groupW })
+  }
+
+  return spans
 }
 
 function renderCircuitSchedule(ctx: DrawContext, cert: EICRCertificate): void {
@@ -1367,7 +1631,6 @@ function renderCircuitSchedule(ctx: DrawContext, cert: EICRCertificate): void {
     // Landscape page for circuit schedule
     createPage(ctx, true)
     const pageW = A4_HEIGHT  // landscape
-    const pageH = A4_WIDTH
     const contentW = pageW - MARGIN.left - MARGIN.right
 
     // Board header
@@ -1383,72 +1646,56 @@ function renderCircuitSchedule(ctx: DrawContext, cert: EICRCertificate): void {
     ])
     ctx.y -= 4
 
-    // Column definitions — abbreviated headers
-    const circuitCols = [
-      { header: 'Cct', width: 22 },
-      { header: 'Description', width: 60 },
-      { header: 'Type', width: 18 },
-      { header: 'Ref', width: 16 },
-      { header: 'Pts', width: 18 },
-      { header: 'Live', width: 22 },
-      { header: 'CPC', width: 22 },
-      { header: 'tmax', width: 20 },
-      { header: 'BS', width: 24 },
-      { header: 'Ty', width: 14 },
-      { header: 'In', width: 18 },
-      { header: 'Zs max', width: 26 },
-      { header: 'Icn', width: 20 },
-      { header: 'RCD BS', width: 24 },
-      { header: 'RCD Ty', width: 22 },
-      { header: 'IΔn', width: 20 },
-      { header: 'r1', width: 22 },
-      { header: 'rn', width: 22 },
-      { header: 'r2', width: 22 },
-      { header: 'R1R2', width: 24 },
-      { header: 'R1R2/', width: 24 },
-      { header: 'R2', width: 22 },
-      { header: 'Vt', width: 18 },
-      { header: 'IR LL', width: 24 },
-      { header: 'IR LE', width: 24 },
-      { header: 'Zs', width: 24 },
-      { header: 'Pol', width: 18 },
-      { header: 'RCD t', width: 24 },
-      { header: 'Btn', width: 18 },
-      { header: 'AFDD', width: 20 },
-      { header: 'Remarks', width: 0 },
-    ]
+    // Build column definitions
+    const circuitCols = buildCircuitColumns(contentW)
+    const groupSpans = computeGroupSpans(circuitCols, MARGIN.left)
 
-    // Calculate remaining width for remarks
-    const usedWidth = circuitCols.slice(0, -1).reduce((sum, c) => sum + c.width, 0)
-    circuitCols[circuitCols.length - 1].width = Math.max(40, contentW - usedWidth)
+    const groupRowH = 10
+    const colRowH = 11
+    const dataRowH = 11
 
-    const rowH = 11
-
-    // Draw column headers
+    // --- Draw two-row header: group row + column row ---
     function drawCircuitHeader(): void {
-      let x = MARGIN.left
-      drawRect(ctx.currentPage, MARGIN.left, ctx.y - rowH - 2, contentW, rowH + 2, COLOURS.headerBg)
-      for (const col of circuitCols) {
-        drawText(ctx.currentPage, col.header, x + 1, ctx.y - rowH, ctx.fontBold, FONT_SIZE.tiny - 0.5, COLOURS.headerText, col.width - 2)
-        x += col.width
+      // Row 1: Group headers
+      drawRect(ctx.currentPage, MARGIN.left, ctx.y - groupRowH, contentW, groupRowH, COLOURS.groupHeaderBg)
+      for (const span of groupSpans) {
+        if (span.label) {
+          // Centre the group label within its span
+          const labelW = textWidth(span.label, ctx.fontBold, FONT_SIZE.tiny - 0.5)
+          const labelX = span.x + Math.max(1, (span.width - labelW) / 2)
+          drawText(ctx.currentPage, span.label, labelX, ctx.y - groupRowH + 3, ctx.fontBold, FONT_SIZE.tiny - 0.5, COLOURS.headerText, span.width - 2)
+          // Vertical separator between groups
+          drawLine(ctx.currentPage, span.x, ctx.y, span.x, ctx.y - groupRowH, COLOURS.midGrey, 0.3)
+        }
       }
-      ctx.y -= rowH + 2
+      ctx.y -= groupRowH
+
+      // Row 2: Column headers
+      let cx = MARGIN.left
+      drawRect(ctx.currentPage, MARGIN.left, ctx.y - colRowH, contentW, colRowH, COLOURS.headerBg)
+      for (const col of circuitCols) {
+        drawText(ctx.currentPage, col.header, cx + 1, ctx.y - colRowH + 3, ctx.fontBold, FONT_SIZE.tiny - 0.5, COLOURS.headerText, col.width - 2)
+        cx += col.width
+      }
+      ctx.y -= colRowH
     }
 
     drawCircuitHeader()
 
-    // Draw each circuit row
+    // --- Draw each circuit row ---
+    // Values array order matches column order (IET: Polarity before Zs)
     boardCircuits.forEach((circuit, idx) => {
-      ensureSpace(ctx, rowH + 2, true)
-      if (ctx.y > pageH - MARGIN.top - 10) {
+      ensureSpace(ctx, dataRowH + 2, true)
+      if (ctx.y > A4_WIDTH - MARGIN.top - 10) {
         drawCircuitHeader()
       }
 
       if (idx % 2 === 1) {
-        drawRect(ctx.currentPage, MARGIN.left, ctx.y - rowH, contentW, rowH, COLOURS.rowAlt)
+        drawRect(ctx.currentPage, MARGIN.left, ctx.y - dataRowH, contentW, dataRowH, COLOURS.rowAlt)
       }
 
       const vals: string[] = [
+        // Circuit Details
         circuit.circuitNumber,
         circuit.circuitDescription,
         circuit.wiringType ?? '',
@@ -1457,45 +1704,55 @@ function renderCircuitSchedule(ctx: DrawContext, cert: EICRCertificate): void {
         formatNum(circuit.liveConductorCsa),
         formatNum(circuit.cpcCsa),
         formatNum(circuit.maxDisconnectTime),
+        // Overcurrent Protective Device
         circuit.ocpdBsEn,
         circuit.ocpdType ?? '',
         formatNum(circuit.ocpdRating),
         formatNum(circuit.maxPermittedZs),
         formatNum(circuit.breakingCapacity),
+        // RCD / RCBO
         circuit.rcdBsEn,
         circuit.rcdType ?? '',
         formatNum(circuit.rcdRating),
+        // Continuity
         formatTestValue(circuit.r1),
         formatTestValue(circuit.rn),
         formatTestValue(circuit.r2),
         formatTestValue(circuit.r1r2),
         formatTestValue(circuit.r1r2OrR2),
         formatTestValue(circuit.r2Standalone),
+        // Insulation Resistance
         formatNum(circuit.irTestVoltage),
         formatTestValue(circuit.irLiveLive),
         formatTestValue(circuit.irLiveEarth),
-        formatNum(circuit.zs),
+        // Polarity — IET order: before EFLI
         formatTick(circuit.polarity),
+        // Earth Fault Loop Impedance
+        formatNum(circuit.zs),
+        // RCD Test
         formatNum(circuit.rcdDisconnectionTime),
         formatTick(circuit.rcdTestButton),
+        // AFDD
         formatTick(circuit.afddTestButton),
+        // Remarks
         circuit.remarks,
       ]
 
       let x = MARGIN.left
       for (let i = 0; i < vals.length; i++) {
         const fontSize = FONT_SIZE.tiny - 0.5
-        drawText(ctx.currentPage, vals[i], x + 1, ctx.y - rowH + 3, ctx.font, fontSize, COLOURS.black, circuitCols[i].width - 2)
+        drawText(ctx.currentPage, vals[i], x + 1, ctx.y - dataRowH + 3, ctx.font, fontSize, COLOURS.black, circuitCols[i].width - 2)
         x += circuitCols[i].width
       }
 
-      // Zs validation highlight — col 26 red if > maxPermittedZs
+      // Zs validation highlight — column index 26 (EFLI Zs) red if > maxPermittedZs
       if (circuit.zs !== null && circuit.maxPermittedZs !== null && circuit.zs > circuit.maxPermittedZs) {
-        const zsX = MARGIN.left + circuitCols.slice(0, 25).reduce((s, c) => s + c.width, 0)
-        drawRect(ctx.currentPage, zsX, ctx.y - rowH, circuitCols[25].width, rowH, undefined, COLOURS.c1Red, 0.8)
+        const zsColIndex = 26 // Zs (Ω) column after Polarity swap
+        const zsX = MARGIN.left + circuitCols.slice(0, zsColIndex).reduce((s, c) => s + c.width, 0)
+        drawRect(ctx.currentPage, zsX, ctx.y - dataRowH, circuitCols[zsColIndex].width, dataRowH, undefined, COLOURS.c1Red, 0.8)
       }
 
-      ctx.y -= rowH
+      ctx.y -= dataRowH
     })
   }
 }
@@ -1504,27 +1761,15 @@ function renderCircuitSchedule(ctx: DrawContext, cert: EICRCertificate): void {
 // PHOTO EVIDENCE PAGES
 // ============================================================
 
-/**
- * Photo layout constants.
- * 2-column grid: each photo scaled to fit within a cell.
- * Max 4 photos per observation (from PhotoCapture maxPhotos=4),
- * so a 2×2 grid fits comfortably on one page section.
- */
 const PHOTO_GRID = {
   cols: 2,
-  cellWidth: Math.floor((CONTENT_WIDTH - 10) / 2),  // ~250
+  cellWidth: Math.floor((CONTENT_WIDTH - 10) / 2),
   maxCellHeight: 180,
   gap: 10,
   captionHeight: 12,
   obsHeaderHeight: 20,
 } as const
 
-/**
- * Fetch a photo from R2 and embed it into the PDF at the given position,
- * scaled to fit within maxWidth × maxHeight while preserving aspect ratio.
- *
- * @returns The actual drawn height, or 0 if the photo could not be embedded.
- */
 async function embedPhoto(
   ctx: DrawContext,
   photoKey: string,
@@ -1540,8 +1785,6 @@ async function embedPhoto(
     const bytes = new Uint8Array(await object.arrayBuffer())
     const contentType = object.httpMetadata?.contentType ?? ''
 
-    // Determine format — photos from PhotoCapture are JPEG (compressed),
-    // but handle PNG fallback for any edge cases
     const isJpeg = contentType.includes('jpeg') || contentType.includes('jpg') ||
                    photoKey.endsWith('.jpg') || photoKey.endsWith('.jpeg')
 
@@ -1549,16 +1792,14 @@ async function embedPhoto(
       ? await ctx.doc.embedJpg(bytes)
       : await ctx.doc.embedPng(bytes)
 
-    // Scale to fit within the cell
     const imgDims = image.scale(1)
     const scaleX = maxWidth / imgDims.width
     const scaleY = maxHeight / imgDims.height
-    const scale = Math.min(scaleX, scaleY, 1) // never upscale
+    const scale = Math.min(scaleX, scaleY, 1)
 
     const drawWidth = imgDims.width * scale
     const drawHeight = imgDims.height * scale
 
-    // Draw light border around the photo area
     drawRect(ctx.currentPage, x, y - drawHeight, drawWidth, drawHeight, undefined, COLOURS.lightGrey, 0.5)
 
     ctx.currentPage.drawImage(image, {
@@ -1570,7 +1811,6 @@ async function embedPhoto(
 
     return drawHeight
   } catch {
-    // Failed to fetch or embed — draw a small placeholder
     const placeholderH = 40
     drawRect(ctx.currentPage, x, y - placeholderH, maxWidth * 0.6, placeholderH, COLOURS.rowAlt, COLOURS.lightGrey)
     drawText(ctx.currentPage, 'Photo unavailable', x + 4, y - placeholderH + 14, ctx.font, FONT_SIZE.small, COLOURS.midGrey)
@@ -1578,13 +1818,7 @@ async function embedPhoto(
   }
 }
 
-/**
- * Render photo evidence pages — one section per observation that has photos.
- * Photos are laid out in a 2-column grid with observation reference headers.
- * Only called when includePhotos option is true.
- */
 async function renderPhotoPages(ctx: DrawContext, cert: EICRCertificate): Promise<void> {
-  // Filter to observations that actually have photos
   const obsWithPhotos = cert.observations.filter((obs) => obs.photoKeys.length > 0)
   if (obsWithPhotos.length === 0) return
 
@@ -1592,7 +1826,6 @@ async function renderPhotoPages(ctx: DrawContext, cert: EICRCertificate): Promis
   drawSectionHeader(ctx, 'Photo Evidence')
   ctx.y -= 4
 
-  // Intro text
   drawText(
     ctx.currentPage,
     `${obsWithPhotos.length} observation${obsWithPhotos.length === 1 ? '' : 's'} with photo evidence attached.`,
@@ -1605,20 +1838,15 @@ async function renderPhotoPages(ctx: DrawContext, cert: EICRCertificate): Promis
   ctx.y -= 16
 
   for (const obs of obsWithPhotos) {
-    // Estimate space needed for this observation:
-    // header + one row of photos minimum
     const rowsNeeded = Math.ceil(obs.photoKeys.length / PHOTO_GRID.cols)
     const estimatedHeight = PHOTO_GRID.obsHeaderHeight +
       (rowsNeeded * (PHOTO_GRID.maxCellHeight + PHOTO_GRID.captionHeight + PHOTO_GRID.gap))
 
-    // If it won't fit, start a new page
     ensureSpace(ctx, Math.min(estimatedHeight, PHOTO_GRID.obsHeaderHeight + PHOTO_GRID.maxCellHeight + 40))
 
-    // Observation sub-header with colour-coded classification
     const obsColour = codeColour(obs.classificationCode)
     drawRect(ctx.currentPage, MARGIN.left, ctx.y - 16, CONTENT_WIDTH, 16, rgb(0.95, 0.95, 0.97))
 
-    // "Obs 1 — C2 — Kitchen" format
     const headerParts = [
       `Obs ${obs.itemNumber}`,
       obs.classificationCode,
@@ -1634,7 +1862,6 @@ async function renderPhotoPages(ctx: DrawContext, cert: EICRCertificate): Promis
       FONT_SIZE.body,
       COLOURS.black
     )
-    // Classification code in colour
     const part0Width = textWidth(headerParts[0] + ' — ', ctx.fontBold, FONT_SIZE.body)
     drawText(
       ctx.currentPage,
@@ -1645,7 +1872,6 @@ async function renderPhotoPages(ctx: DrawContext, cert: EICRCertificate): Promis
       FONT_SIZE.body,
       obsColour
     )
-    // Location
     if (headerParts[2]) {
       drawText(
         ctx.currentPage,
@@ -1660,7 +1886,6 @@ async function renderPhotoPages(ctx: DrawContext, cert: EICRCertificate): Promis
     }
     ctx.y -= PHOTO_GRID.obsHeaderHeight
 
-    // Observation text (truncated summary)
     const obsTextTruncated = obs.observationText.length > 120
       ? obs.observationText.substring(0, 117) + '…'
       : obs.observationText
@@ -1677,15 +1902,12 @@ async function renderPhotoPages(ctx: DrawContext, cert: EICRCertificate): Promis
     )
     ctx.y -= 8
 
-    // Lay out photos in 2-column grid
     for (let i = 0; i < obs.photoKeys.length; i += PHOTO_GRID.cols) {
-      // Check if a new row of photos fits
       ensureSpace(ctx, PHOTO_GRID.maxCellHeight + PHOTO_GRID.captionHeight + PHOTO_GRID.gap)
 
       const rowKeys = obs.photoKeys.slice(i, i + PHOTO_GRID.cols)
       let maxRowHeight = 0
 
-      // Embed each photo in the row
       for (let col = 0; col < rowKeys.length; col++) {
         const cellX = MARGIN.left + col * (PHOTO_GRID.cellWidth + PHOTO_GRID.gap)
         const drawnHeight = await embedPhoto(
@@ -1698,7 +1920,6 @@ async function renderPhotoPages(ctx: DrawContext, cert: EICRCertificate): Promis
         )
         maxRowHeight = Math.max(maxRowHeight, drawnHeight)
 
-        // Photo label beneath
         drawText(
           ctx.currentPage,
           `Photo ${i + col + 1} of ${obs.photoKeys.length}`,
@@ -1713,12 +1934,15 @@ async function renderPhotoPages(ctx: DrawContext, cert: EICRCertificate): Promis
       ctx.y -= maxRowHeight + PHOTO_GRID.captionHeight + PHOTO_GRID.gap
     }
 
-    // Separator line between observations
     ctx.y -= 4
     drawLine(ctx.currentPage, MARGIN.left, ctx.y, MARGIN.left + CONTENT_WIDTH, ctx.y, COLOURS.lightGrey, 0.5)
     ctx.y -= 10
   }
 }
+
+// ============================================================
+// GUIDANCE FOR RECIPIENTS
+// ============================================================
 
 function renderGuidancePage(ctx: DrawContext): void {
   createPage(ctx)
@@ -1733,7 +1957,6 @@ function renderGuidancePage(ctx: DrawContext): void {
     ensureSpace(ctx, 30)
 
     if (trimmed === 'GUIDANCE FOR RECIPIENTS') {
-      // Skip — already in section header
       continue
     }
 
@@ -1783,17 +2006,18 @@ async function generatePDF(cert: EICRCertificate, env: Env, options?: Partial<Ge
     env,
   }
 
-  // Render all sections
-  renderCoverPage(ctx, cert)
-  await renderSummaryPage(ctx, cert)
-  renderSupplyPage(ctx, cert)
-  renderObservationsPage(ctx, cert)
+  // Render all sections — IET Appendix 6 order
+  renderCoverPage(ctx, cert)                      // Sections A–D
+  await renderSummaryPage(ctx, cert)              // Sections E–G
+  renderInspectionSummary(ctx, cert)              // Section H (NEW)
+  renderSupplyPage(ctx, cert)                     // Sections I–J
+  renderObservationsPage(ctx, cert)               // Section K
   if (options?.includePhotos) {
-    await renderPhotoPages(ctx, cert)
+    await renderPhotoPages(ctx, cert)             // Photo Evidence
   }
-  renderInspectionSchedule(ctx, cert)
-  renderCircuitSchedule(ctx, cert)
-  renderGuidancePage(ctx)
+  renderInspectionSchedule(ctx, cert)             // Schedule of Inspections
+  renderCircuitSchedule(ctx, cert)                // Schedule of Circuit Details
+  renderGuidancePage(ctx)                         // Guidance for Recipients
 
   // Apply headers/footers to all pages
   ctx.totalPages = ctx.pages.length
@@ -1934,7 +2158,7 @@ export default {
       )
     }
 
-    // Verify ownership — engineer can only generate PDFs for their own certificates
+    // Verify ownership
     if (body.certificate.engineerId !== userId) {
       status = 403
       structuredLog({
@@ -1954,7 +2178,6 @@ export default {
       const outputFormat = body.options?.outputFormat ?? 'buffer'
 
       if (outputFormat === 'r2') {
-        // Upload to R2
         const pdfKey = `certificates/${body.certificate.id}/${body.certificate.reportNumber}.pdf`
         await env.STORAGE_BUCKET.put(pdfKey, pdfBytes, {
           httpMetadata: { contentType: 'application/pdf' },
@@ -1977,7 +2200,6 @@ export default {
         )
       }
 
-      // Return binary PDF
       structuredLog({
         requestId, route: url.pathname, method: request.method,
         status: 200, latencyMs: Date.now() - startTime, userId,
