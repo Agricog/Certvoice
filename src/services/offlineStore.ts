@@ -161,7 +161,6 @@ export async function getDirtyCertificates(): Promise<StoredCertificate[]> {
     const index = store.index('isDirty')
     const request = index.getAll()
     request.onsuccess = () => resolve((request.result ?? []).filter((r: StoredCertificate) => r.isDirty))
-    request.onsuccess = () => resolve(request.result ?? [])
     request.onerror = () => reject(new Error('Failed to query dirty certificates'))
   })
 }
