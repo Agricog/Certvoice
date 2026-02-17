@@ -39,7 +39,7 @@ export class ApiAuthError extends Error {
 
 export class ApiRateLimitError extends Error {
   public retryAfterSeconds: number
-  constructor(retryAfter: number, requestId?: string) {
+  constructor(retryAfter: number) {
     super(`Rate limited. Retry after ${retryAfter}s`)
     this.name = 'ApiRateLimitError'
     this.retryAfterSeconds = retryAfter
