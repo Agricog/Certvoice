@@ -404,6 +404,7 @@ function corsHeaders(origin: string, allowedOrigin: string): Record<string, stri
     'Access-Control-Allow-Origin': isAllowed ? origin : '',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Expose-Headers': 'X-Validation-Status, X-Validation-Errors, X-Validation-Warnings',
     'Access-Control-Max-Age': '86400',
   }
 }
@@ -896,6 +897,195 @@ function outcomeColour(outcome: InspectionOutcome | null): RGB {
   if (outcome === 'C3') return COLOURS.c3Blue
   if (outcome === 'FI') return COLOURS.fiPurple
   return COLOURS.black
+}
+
+// ============================================================
+// MANDATORY FIELD VALIDATION (BS 7671 Appendix 6 compliance)
+//
+// A valid issued EICR requires these fields to be present.
+// Drafts generate with warnings; ISSUED/COMPLETE status is
+// blocked if any mandatory fields are missing.
+// ============================================================
+
+type ValidationSeverity = 'error' | 'warning'
+
+interface ValidationIssue {
+  field: string
+  section: string
+  message: string
+  severity: ValidationSeverity
+}
+
+interface ValidationResult {
+  valid: boolean
+  issues: ValidationIssue[]
+}
+
+/**
+ * Validate an EICR certificate against BS 7671 mandatory field requirements.
+ *
+ * "error" severity = must be present before issuing (scheme body will reject)
+ * "warning" severity = recommended but not strictly blocking
+ */
+function validateCertificate(cert: EICRCertificate): ValidationResult {
+  const issues: ValidationIssue[] = []
+
+  function requireString(
+    value: string | null | undefined,
+    field: string,
+    section: string,
+    message: string,
+    severity: ValidationSeverity = 'error'
+  ): void {
+    if (!value || value.trim() === '') {
+      issues.push({ field, section, message, severity })
+    }
+  }
+
+  function requireValue(
+    value: unknown,
+    field: string,
+    section: string,
+    message: string,
+    severity: ValidationSeverity = 'error'
+  ): void {
+    if (value === null || value === undefined) {
+      issues.push({ field, section, message, severity })
+    }
+  }
+
+  // Section A — Client Details
+  requireString(cert.clientDetails?.clientName, 'clientName', 'A', 'Client name is required')
+  requireString(cert.clientDetails?.clientAddress, 'clientAddress', 'A', 'Client address is required')
+
+  // Section C — Installation Details
+  requireString(cert.installationDetails?.installationAddress, 'installationAddress', 'C', 'Installation address is required')
+
+  // Section D — Extent and Limitations
+  requireString(cert.extentAndLimitations?.extentCovered, 'extentCovered', 'D', 'Extent covered must be described')
+
+  // Section E — Overall Assessment
+  requireValue(cert.summaryOfCondition?.overallAssessment, 'overallAssessment', 'E', 'Overall assessment (Satisfactory/Unsatisfactory) is required')
+
+  // Section F — Recommendations
+  requireString(cert.recommendations?.nextInspectionDate, 'nextInspectionDate', 'F', 'Next inspection date is required')
+
+  // Section G — Declaration (all mandatory for issued certificates)
+  requireString(cert.declaration?.inspectorName, 'inspectorName', 'G', 'Inspector name is required')
+  requireString(cert.declaration?.inspectorSignatureKey, 'inspectorSignatureKey', 'G', 'Inspector signature is required')
+  requireString(cert.declaration?.companyName, 'companyName', 'G', 'Company name is required')
+  requireString(cert.declaration?.companyAddress, 'companyAddress', 'G', 'Company address is required')
+  requireString(cert.declaration?.registrationNumber, 'registrationNumber', 'G', 'Scheme registration number is required')
+  requireString(cert.declaration?.dateInspected, 'dateInspected', 'G', 'Date of inspection is required')
+
+  // QS fields — required if scheme body requires qualified supervisor sign-off
+  requireString(cert.declaration?.qsName, 'qsName', 'G', 'Qualified Supervisor name is recommended', 'warning')
+  requireString(cert.declaration?.qsSignatureKey, 'qsSignatureKey', 'G', 'Qualified Supervisor signature is recommended', 'warning')
+
+  // Section I — Supply Characteristics
+  requireValue(cert.supplyCharacteristics?.earthingType, 'earthingType', 'I', 'Earthing type is required')
+  requireValue(cert.supplyCharacteristics?.nominalVoltage, 'nominalVoltage', 'I', 'Nominal voltage is required')
+  requireValue(cert.supplyCharacteristics?.ze, 'ze', 'I', 'Ze measurement is required')
+
+  // Schedules — at least one of each should exist
+  if ((cert.inspectionSchedule ?? []).length === 0) {
+    issues.push({
+      field: 'inspectionSchedule',
+      section: 'Schedule',
+      message: 'Schedule of Inspections has no items',
+      severity: 'error',
+    })
+  }
+  if ((cert.distributionBoards ?? []).length === 0) {
+    issues.push({
+      field: 'distributionBoards',
+      section: 'Schedule',
+      message: 'No distribution boards recorded',
+      severity: 'error',
+    })
+  }
+  if ((cert.circuits ?? []).length === 0) {
+    issues.push({
+      field: 'circuits',
+      section: 'Schedule',
+      message: 'No circuits recorded in test results schedule',
+      severity: 'error',
+    })
+  }
+
+  const hasErrors = issues.some((i) => i.severity === 'error')
+
+  return {
+    valid: !hasErrors,
+    issues,
+  }
+}
+
+/**
+ * Render a validation warning banner on the first page of the PDF.
+ * Shows amber border box with list of missing mandatory fields.
+ * Only rendered for non-ISSUED certificates (drafts, in-progress).
+ */
+function renderValidationBanner(ctx: DrawContext, issues: ValidationIssue[]): void {
+  if (issues.length === 0) return
+
+  const errors = issues.filter((i) => i.severity === 'error')
+  const warnings = issues.filter((i) => i.severity === 'warning')
+
+  // Calculate banner height: title + lines
+  const lineH = 10
+  const titleH = 14
+  const padding = 8
+  const lines = errors.length + (warnings.length > 0 ? 1 : 0) // +1 for warnings summary
+  const bannerH = titleH + (lines * lineH) + (padding * 2)
+
+  ensureSpace(ctx, bannerH + 10)
+
+  const bannerY = ctx.y - bannerH
+  const bannerColour = errors.length > 0 ? COLOURS.c2Amber : COLOURS.c3Blue
+
+  // Amber/blue border box
+  drawRect(ctx.currentPage, MARGIN.left, bannerY, CONTENT_WIDTH, bannerH, rgb(1, 0.97, 0.88), bannerColour, 1.5)
+
+  let y = ctx.y - padding
+
+  // Title
+  const titleText = errors.length > 0
+    ? `⚠ ${errors.length} mandatory field${errors.length !== 1 ? 's' : ''} missing — resolve before issuing`
+    : `${warnings.length} recommendation${warnings.length !== 1 ? 's' : ''}`
+  drawText(ctx.currentPage, titleText, MARGIN.left + padding, y - 10, ctx.fontBold, FONT_SIZE.body, bannerColour)
+  y -= titleH
+
+  // Error lines
+  for (const issue of errors) {
+    drawText(
+      ctx.currentPage,
+      `Section ${issue.section}: ${issue.message}`,
+      MARGIN.left + padding + 8,
+      y - 2,
+      ctx.font,
+      FONT_SIZE.small,
+      COLOURS.darkGrey,
+      CONTENT_WIDTH - padding * 2 - 8
+    )
+    y -= lineH
+  }
+
+  // Warnings summary (don't list each one, just count)
+  if (warnings.length > 0) {
+    drawText(
+      ctx.currentPage,
+      `+ ${warnings.length} recommended field${warnings.length !== 1 ? 's' : ''} (not blocking)`,
+      MARGIN.left + padding + 8,
+      y - 2,
+      ctx.font,
+      FONT_SIZE.small,
+      COLOURS.midGrey
+    )
+    y -= lineH
+  }
+
+  ctx.y = bannerY - 8
 }
 
 // ============================================================
@@ -1979,7 +2169,15 @@ function renderGuidancePage(ctx: DrawContext): void {
 // MAIN GENERATION FUNCTION
 // ============================================================
 
-async function generatePDF(cert: EICRCertificate, env: Env, options?: Partial<GenerateOptions>): Promise<Uint8Array> {
+interface GenerationOutput {
+  pdfBytes: Uint8Array
+  validation: ValidationResult
+}
+
+async function generatePDF(cert: EICRCertificate, env: Env, options?: Partial<GenerateOptions>): Promise<GenerationOutput> {
+  // Run validation before rendering
+  const validation = validateCertificate(cert)
+
   const doc = await PDFDocument.create()
 
   doc.setTitle(`EICR ${cert.reportNumber}`)
@@ -2006,10 +2204,16 @@ async function generatePDF(cert: EICRCertificate, env: Env, options?: Partial<Ge
     env,
   }
 
+  // Render validation banner on non-issued certificates if there are issues
+  const isIssued = cert.status === 'ISSUED' || cert.status === 'COMPLETE'
+  if (!isIssued && validation.issues.length > 0) {
+    renderValidationBanner(ctx, validation.issues)
+  }
+
   // Render all sections — IET Appendix 6 order
   renderCoverPage(ctx, cert)                      // Sections A–D
   await renderSummaryPage(ctx, cert)              // Sections E–G
-  renderInspectionSummary(ctx, cert)              // Section H (NEW)
+  renderInspectionSummary(ctx, cert)              // Section H
   renderSupplyPage(ctx, cert)                     // Sections I–J
   renderObservationsPage(ctx, cert)               // Section K
   if (options?.includePhotos) {
@@ -2039,7 +2243,8 @@ async function generatePDF(cert: EICRCertificate, env: Env, options?: Partial<Ge
     }
   }
 
-  return doc.save()
+  const pdfBytes = await doc.save()
+  return { pdfBytes, validation }
 }
 
 // ============================================================
@@ -2174,7 +2379,33 @@ export default {
 
     // Generate PDF
     try {
-      const pdfBytes = await generatePDF(body.certificate, env, body.options)
+      // Block generation of ISSUED/COMPLETE certificates with missing mandatory fields
+      const isIssuedStatus = body.certificate.status === 'ISSUED' || body.certificate.status === 'COMPLETE'
+      if (isIssuedStatus) {
+        const preCheck = validateCertificate(body.certificate)
+        if (!preCheck.valid) {
+          const errorFields = preCheck.issues
+            .filter((i) => i.severity === 'error')
+            .map((i) => `Section ${i.section}: ${i.message}`)
+          status = 422
+          structuredLog({
+            requestId, route: url.pathname, method: request.method,
+            status, latencyMs: Date.now() - startTime, userId,
+            message: `Validation blocked ISSUED PDF: ${errorFields.length} mandatory fields missing`,
+          })
+          return new Response(
+            JSON.stringify({
+              error: 'Certificate cannot be issued with missing mandatory fields',
+              code: 'VALIDATION_FAILED',
+              validation: preCheck,
+              requestId,
+            }),
+            { status, headers: { ...cors, 'Content-Type': 'application/json' } }
+          )
+        }
+      }
+
+      const { pdfBytes, validation } = await generatePDF(body.certificate, env, body.options)
       const outputFormat = body.options?.outputFormat ?? 'buffer'
 
       if (outputFormat === 'r2') {
@@ -2195,15 +2426,20 @@ export default {
         })
 
         return new Response(
-          JSON.stringify({ pdfKey, size: pdfBytes.length, requestId }),
+          JSON.stringify({ pdfKey, size: pdfBytes.length, validation, requestId }),
           { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } }
         )
       }
 
+      // For binary PDF responses, include validation in a custom header
+      const validationSummary = validation.valid
+        ? 'valid'
+        : `${validation.issues.filter((i) => i.severity === 'error').length} errors, ${validation.issues.filter((i) => i.severity === 'warning').length} warnings`
+
       structuredLog({
         requestId, route: url.pathname, method: request.method,
         status: 200, latencyMs: Date.now() - startTime, userId,
-        message: `PDF generated: ${body.certificate.reportNumber} (${pdfBytes.length} bytes)`,
+        message: `PDF generated: ${body.certificate.reportNumber} (${pdfBytes.length} bytes) [${validationSummary}]`,
       })
 
       return new Response(pdfBytes, {
@@ -2213,6 +2449,9 @@ export default {
           'Content-Type': 'application/pdf',
           'Content-Disposition': `attachment; filename="${body.certificate.reportNumber}.pdf"`,
           'Content-Length': String(pdfBytes.length),
+          'X-Validation-Status': validation.valid ? 'valid' : 'incomplete',
+          'X-Validation-Errors': String(validation.issues.filter((i) => i.severity === 'error').length),
+          'X-Validation-Warnings': String(validation.issues.filter((i) => i.severity === 'warning').length),
         },
       })
     } catch (error) {
