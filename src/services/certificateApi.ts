@@ -1,11 +1,14 @@
 /**
- * CertVoice — Certificate API Service
+ * CertVoice — Certificate API Service (v2)
  *
  * Typed functions for all certificate CRUD endpoints.
  * Used by InspectionCapture and the sync service.
  *
- * All calls use Bearer token auth via Clerk.
- * All calls go through VITE_API_BASE_URL.
+ * v2 changes:
+ *   - Null token guard: throws ApiAuthError, never sends "Bearer null"
+ *   - Retry-After: reads header on 429, exposes retryAfterSeconds
+ *   - Canonical error types: ApiAuthError, ApiRateLimitError, ApiError
+ *   - Last-modified: sync sends lastModified for conflict detection
  *
  * @module services/certificateApi
  */
@@ -24,8 +27,42 @@ import type {
 const API_BASE = (typeof import.meta !== 'undefined' ? import.meta.env?.VITE_API_BASE_URL : '') ?? ''
 
 // ============================================================
+// ERRORS
+// ============================================================
+
+export class ApiAuthError extends Error {
+  constructor(message = 'Not authenticated') {
+    super(message)
+    this.name = 'ApiAuthError'
+  }
+}
+
+export class ApiRateLimitError extends Error {
+  public retryAfterSeconds: number
+  constructor(retryAfter: number, requestId?: string) {
+    super(`Rate limited. Retry after ${retryAfter}s`)
+    this.name = 'ApiRateLimitError'
+    this.retryAfterSeconds = retryAfter
+  }
+}
+
+export class ApiError extends Error {
+  public status: number
+  public requestId?: string
+  constructor(status: number, message: string, requestId?: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.requestId = requestId
+  }
+}
+
+// ============================================================
 // TYPES
 // ============================================================
+
+/** Token getter — from useApiToken hook. Can return string or string|null */
+type TokenGetter = () => Promise<string | null>
 
 export interface CertificateListItem {
   id: string
@@ -48,18 +85,12 @@ export interface CreateCertificateParams {
   clientName?: string
   clientAddress?: string
   installationAddress?: string
-  installationPostcode?: string
   purpose?: string
   inspectionDates?: string[]
   premisesType?: string
   extentOfInspection?: string
   agreedLimitations?: string
   operationalLimitations?: string
-}
-
-export interface ApiError {
-  error: string
-  requestId?: string
 }
 
 export interface SyncStats {
@@ -69,16 +100,19 @@ export interface SyncStats {
 }
 
 // ============================================================
-// HELPERS
+// CORE API CALLER
 // ============================================================
 
 async function apiCall<T>(
   path: string,
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   options: RequestInit = {}
 ): Promise<T> {
+  // --- Guard: never send "Bearer null" ---
   const token = await getToken()
-  if (!token) throw new Error('Not authenticated')
+  if (!token) {
+    throw new ApiAuthError('No auth token available — sign in required')
+  }
 
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
@@ -89,10 +123,32 @@ async function apiCall<T>(
     },
   })
 
+  // --- Handle 429 with Retry-After ---
+  if (response.status === 429) {
+    const retryHeader = response.headers.get('Retry-After')
+    const retrySeconds = retryHeader ? parseInt(retryHeader, 10) : 60
+    let requestId: string | undefined
+    try {
+      const body = await response.json()
+      requestId = body?.requestId
+    } catch { /* ignore parse failure */ }
+    throw new ApiRateLimitError(isNaN(retrySeconds) ? 60 : retrySeconds, requestId)
+  }
+
+  // --- Handle 401 (session expired mid-request) ---
+  if (response.status === 401) {
+    throw new ApiAuthError('Session expired or invalid')
+  }
+
+  // --- Parse response ---
   const data = await response.json()
 
   if (!response.ok) {
-    throw new Error((data as ApiError).error ?? `API error ${response.status}`)
+    throw new ApiError(
+      response.status,
+      data?.error ?? `API error ${response.status}`,
+      data?.requestId
+    )
   }
 
   return data as T
@@ -103,7 +159,7 @@ async function apiCall<T>(
 // ============================================================
 
 export async function listCertificates(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   params?: { status?: string; limit?: number }
 ): Promise<{ data: CertificateListItem[] }> {
   const query = new URLSearchParams()
@@ -114,14 +170,14 @@ export async function listCertificates(
 }
 
 export async function getCertificate(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   certId: string
 ): Promise<Partial<EICRCertificate>> {
   return apiCall(`/api/certificates/${certId}`, getToken)
 }
 
 export async function createCertificate(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   params: CreateCertificateParams
 ): Promise<{ id: string; reportNumber: string; status: string; createdAt: string }> {
   return apiCall('/api/certificates', getToken, {
@@ -131,7 +187,7 @@ export async function createCertificate(
 }
 
 export async function updateCertificate(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   certId: string,
   updates: Record<string, unknown>
 ): Promise<{ id: string; status: string; updatedAt: string }> {
@@ -142,7 +198,7 @@ export async function updateCertificate(
 }
 
 export async function deleteCertificate(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   certId: string
 ): Promise<{ deleted: boolean; id: string }> {
   return apiCall(`/api/certificates/${certId}`, getToken, {
@@ -155,7 +211,7 @@ export async function deleteCertificate(
 // ============================================================
 
 export async function addCircuit(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   certId: string,
   circuit: Partial<CircuitDetail> & { voiceTranscript?: string; captureMethod?: string; dbLocation?: string }
 ): Promise<{ circuit: CircuitDetail }> {
@@ -166,7 +222,7 @@ export async function addCircuit(
 }
 
 export async function updateCircuit(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   certId: string,
   circuitId: string,
   updates: Partial<CircuitDetail>
@@ -178,7 +234,7 @@ export async function updateCircuit(
 }
 
 export async function deleteCircuit(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   certId: string,
   circuitId: string
 ): Promise<{ deleted: boolean; id: string }> {
@@ -192,7 +248,7 @@ export async function deleteCircuit(
 // ============================================================
 
 export async function addObservation(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   certId: string,
   observation: Partial<Observation> & { voiceTranscript?: string; captureMethod?: string }
 ): Promise<{ observation: Observation }> {
@@ -203,7 +259,7 @@ export async function addObservation(
 }
 
 export async function updateObservation(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   certId: string,
   obsId: string,
   updates: Partial<Observation>
@@ -215,7 +271,7 @@ export async function updateObservation(
 }
 
 export async function deleteObservation(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   certId: string,
   obsId: string
 ): Promise<{ deleted: boolean; id: string }> {
@@ -229,7 +285,7 @@ export async function deleteObservation(
 // ============================================================
 
 export async function addBoard(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   certId: string,
   board: Partial<DistributionBoardHeader>
 ): Promise<{ board: DistributionBoardHeader }> {
@@ -240,7 +296,7 @@ export async function addBoard(
 }
 
 export async function updateBoard(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   certId: string,
   boardId: string,
   updates: Partial<DistributionBoardHeader>
@@ -256,9 +312,10 @@ export async function updateBoard(
 // ============================================================
 
 export async function syncCertificate(
-  getToken: () => Promise<string | null>,
+  getToken: TokenGetter,
   certId: string,
-  certificate: Partial<EICRCertificate>
+  certificate: Partial<EICRCertificate>,
+  lastModified?: string
 ): Promise<{ synced: boolean; stats: SyncStats }> {
   return apiCall(`/api/certificates/${certId}/sync`, getToken, {
     method: 'PUT',
@@ -266,6 +323,7 @@ export async function syncCertificate(
       distributionBoards: certificate.distributionBoards ?? [],
       circuits: certificate.circuits ?? [],
       observations: certificate.observations ?? [],
+      lastModified: lastModified ?? new Date().toISOString(),
     }),
   })
 }
