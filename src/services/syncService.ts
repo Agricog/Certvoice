@@ -1,25 +1,24 @@
 /**
- * CertVoice — Sync Service
+ * CertVoice — Sync Service (v2)
  *
- * Background sync engine that watches connectivity and pushes
- * dirty certificates to the API when online.
+ * Background sync engine — watches connectivity and pushes dirty
+ * certificates to the API when online.
+ *
+ * v2 changes:
+ *   - Auth-aware: pauses sync on ApiAuthError (no token / expired session)
+ *   - Rate-limit-aware: reads retryAfterSeconds from ApiRateLimitError
+ *   - Last-write-wins: sends lastModified timestamp with each sync
+ *   - Smarter backoff: uses Retry-After from 429 instead of fixed intervals
  *
  * Strategy:
  *   1. Every certificate change saves to IndexedDB immediately (instant)
- *   2. Certificate is marked dirty
- *   3. When online, sync service picks up dirty certs and calls /sync endpoint
- *   4. On success, marks certificate clean
- *   5. On failure, retries with exponential backoff (max 3 retries)
- *
- * The sync service uses the bulk /sync endpoint rather than individual
- * circuit/observation calls — simpler, fewer requests, idempotent.
- *
- * Usage:
- *   const sync = createSyncService(getToken)
- *   sync.start()        // begin watching
- *   sync.syncNow()      // trigger immediate sync
- *   sync.stop()         // cleanup
- *   sync.onStatusChange((status) => ...)  // UI updates
+ *   2. Certificate is marked dirty with lastModified timestamp
+ *   3. When online + authenticated, sync service picks up dirty certs
+ *   4. Calls /sync endpoint with lastModified for conflict detection
+ *   5. On success: marks certificate clean
+ *   6. On auth failure: pauses sync, sets status to 'auth-required'
+ *   7. On rate limit: backs off for Retry-After seconds
+ *   8. On other failure: exponential backoff (max 3 retries per cert)
  *
  * @module services/syncService
  */
@@ -31,13 +30,13 @@ import {
   onConnectivityChange,
 } from './offlineStore'
 import type { StoredCertificate } from './offlineStore'
-import { syncCertificate } from './certificateApi'
+import { syncCertificate, ApiAuthError, ApiRateLimitError } from './certificateApi'
 
 // ============================================================
 // TYPES
 // ============================================================
 
-export type SyncStatus = 'idle' | 'syncing' | 'offline' | 'error' | 'synced'
+export type SyncStatus = 'idle' | 'syncing' | 'offline' | 'error' | 'synced' | 'auth-required'
 
 export interface SyncServiceState {
   status: SyncStatus
@@ -64,10 +63,12 @@ export function createSyncService(
   getToken: () => Promise<string | null>
 ) {
   let intervalId: ReturnType<typeof setInterval> | null = null
+  let retryTimeoutId: ReturnType<typeof setTimeout> | null = null
   let cleanupConnectivity: (() => void) | null = null
   let statusCallbacks: StatusCallback[] = []
   let isSyncing = false
   let retryCount = 0
+  let rateLimitPauseUntil = 0
 
   const state: SyncServiceState = {
     status: isOnline() ? 'idle' : 'offline',
@@ -96,6 +97,20 @@ export function createSyncService(
       return
     }
 
+    // Respect rate limit pause
+    if (Date.now() < rateLimitPauseUntil) {
+      const waitSec = Math.ceil((rateLimitPauseUntil - Date.now()) / 1000)
+      setState({ status: 'error', lastError: `Rate limited — retrying in ${waitSec}s` })
+      return
+    }
+
+    // Check token availability before starting
+    const token = await getToken()
+    if (!token) {
+      setState({ status: 'auth-required', lastError: 'Sign in to sync' })
+      return
+    }
+
     isSyncing = true
     setState({ status: 'syncing' })
 
@@ -118,6 +133,25 @@ export function createSyncService(
           syncedCount++
           setState({ pendingCount: dirtyCerts.length - syncedCount })
         } catch (err) {
+          // Auth error — pause everything
+          if (err instanceof ApiAuthError) {
+            setState({ status: 'auth-required', lastError: 'Sign in to sync' })
+            isSyncing = false
+            return
+          }
+
+          // Rate limit — pause for Retry-After duration
+          if (err instanceof ApiRateLimitError) {
+            rateLimitPauseUntil = Date.now() + (err.retryAfterSeconds * 1000)
+            setState({
+              status: 'error',
+              lastError: `Rate limited — retrying in ${err.retryAfterSeconds}s`,
+            })
+            scheduleRetry(err.retryAfterSeconds * 1000)
+            isSyncing = false
+            return
+          }
+
           const message = err instanceof Error ? err.message : 'Sync failed'
           console.error(`[SyncService] Failed to sync ${stored.id}:`, message)
           // Continue with next cert — don't block on one failure
@@ -155,21 +189,30 @@ export function createSyncService(
     const cert = stored.data
     if (!cert.id) throw new Error('Certificate has no ID')
 
-    await syncCertificate(getToken, cert.id, cert)
+    // Send lastModified for conflict detection (last-write-wins on server)
+    await syncCertificate(getToken, cert.id, cert, stored.lastModified)
     await markSynced(stored.id)
   }
 
   // --- Retry with backoff ---
-  function scheduleRetry(): void {
-    if (retryCount >= MAX_RETRIES) {
+  function scheduleRetry(delayMs?: number): void {
+    // Clear any pending retry
+    if (retryTimeoutId) {
+      clearTimeout(retryTimeoutId)
+      retryTimeoutId = null
+    }
+
+    if (retryCount >= MAX_RETRIES && !delayMs) {
       setState({ status: 'error', lastError: 'Max retries reached. Will retry on next interval.' })
       retryCount = 0
       return
     }
 
     retryCount++
-    const delay = RETRY_BASE_MS * Math.pow(2, retryCount - 1)
-    setTimeout(() => {
+    const delay = delayMs ?? RETRY_BASE_MS * Math.pow(2, retryCount - 1)
+
+    retryTimeoutId = setTimeout(() => {
+      retryTimeoutId = null
       if (isOnline()) syncAll()
     }, delay)
   }
@@ -178,7 +221,6 @@ export function createSyncService(
   function handleConnectivityChange(online: boolean): void {
     if (online) {
       setState({ status: 'idle' })
-      // Sync immediately when coming back online
       syncAll()
     } else {
       setState({ status: 'offline' })
@@ -189,18 +231,13 @@ export function createSyncService(
   return {
     /** Start watching for changes and connectivity */
     start(): void {
-      // Set initial state
       setState({ status: isOnline() ? 'idle' : 'offline' })
-
-      // Watch connectivity
       cleanupConnectivity = onConnectivityChange(handleConnectivityChange)
 
-      // Periodic sync check
       intervalId = setInterval(() => {
         if (isOnline() && !isSyncing) syncAll()
       }, SYNC_INTERVAL_MS)
 
-      // Initial sync
       if (isOnline()) syncAll()
     },
 
@@ -209,6 +246,10 @@ export function createSyncService(
       if (intervalId) {
         clearInterval(intervalId)
         intervalId = null
+      }
+      if (retryTimeoutId) {
+        clearTimeout(retryTimeoutId)
+        retryTimeoutId = null
       }
       if (cleanupConnectivity) {
         cleanupConnectivity()
@@ -225,7 +266,6 @@ export function createSyncService(
     /** Subscribe to status changes */
     onStatusChange(callback: StatusCallback): () => void {
       statusCallbacks.push(callback)
-      // Emit current state immediately
       callback({ ...state })
       return () => {
         statusCallbacks = statusCallbacks.filter((cb) => cb !== callback)
