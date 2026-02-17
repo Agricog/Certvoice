@@ -34,33 +34,19 @@ export const CONTENT_WIDTH = PAGE.width - PAGE.marginLeft - PAGE.marginRight
 // ============================================================
 
 export const COLOURS = {
-  /** Near-black for body text */
   text: rgb(0.1, 0.1, 0.12),
-  /** Mid-grey for labels and secondary text */
   muted: rgb(0.45, 0.45, 0.5),
-  /** Light grey for table borders */
   border: rgb(0.78, 0.78, 0.82),
-  /** Very light grey for alternating table rows */
   rowAlt: rgb(0.95, 0.95, 0.96),
-  /** White */
   white: rgb(1, 1, 1),
-  /** CertVoice brand accent (blue) */
   accent: rgb(0.24, 0.47, 0.96),
-  /** Dark header background */
   headerBg: rgb(0.12, 0.14, 0.18),
-  /** Section header background */
   sectionBg: rgb(0.22, 0.25, 0.3),
-  /** C1 danger red */
   c1: rgb(0.87, 0.17, 0.17),
-  /** C2 amber/orange */
   c2: rgb(0.91, 0.6, 0.08),
-  /** C3 green */
   c3: rgb(0.16, 0.65, 0.27),
-  /** FI blue */
   fi: rgb(0.24, 0.47, 0.96),
-  /** Pass green */
   pass: rgb(0.16, 0.65, 0.27),
-  /** Fail red */
   fail: rgb(0.87, 0.17, 0.17),
 } as const
 
@@ -69,23 +55,14 @@ export const COLOURS = {
 // ============================================================
 
 export const FONT = {
-  /** Main document title */
   title: 16,
-  /** Section headers (A, B, C...) */
   sectionHeader: 10,
-  /** Field labels */
   label: 7,
-  /** Field values */
   value: 8.5,
-  /** Table header text */
   tableHeader: 6.5,
-  /** Table body text */
   tableBody: 7,
-  /** Small print / footer */
   small: 6,
-  /** Page number */
   pageNumber: 7,
-  /** Report number in header */
   reportNumber: 8,
 } as const
 
@@ -94,23 +71,14 @@ export const FONT = {
 // ============================================================
 
 export const SPACING = {
-  /** Space between sections */
   sectionGap: 14,
-  /** Space between field rows within a section */
   fieldRowGap: 16,
-  /** Height of section header bar */
   sectionHeaderHeight: 18,
-  /** Height of a standard field row */
   fieldRowHeight: 14,
-  /** Padding inside section header */
   sectionHeaderPadding: 5,
-  /** Height of table header row */
   tableHeaderHeight: 16,
-  /** Height of table body row */
   tableRowHeight: 14,
-  /** Height of page header */
   pageHeaderHeight: 50,
-  /** Line height multiplier for wrapped text */
   lineHeight: 1.3,
 } as const
 
@@ -118,10 +86,6 @@ export const SPACING = {
 // DRAWING HELPERS
 // ============================================================
 
-/**
- * Draw the page header (appears on every page).
- * Dark background bar with CertVoice branding, report number, and page info.
- */
 export function drawPageHeader(
   page: PDFPage,
   font: PDFFont,
@@ -133,7 +97,6 @@ export function drawPageHeader(
   const { width, marginLeft, marginRight } = PAGE
   const y = PAGE.height - PAGE.marginTop
 
-  // Dark header bar
   page.drawRectangle({
     x: marginLeft,
     y: y - SPACING.pageHeaderHeight,
@@ -142,7 +105,6 @@ export function drawPageHeader(
     color: COLOURS.headerBg,
   })
 
-  // Title
   page.drawText('ELECTRICAL INSTALLATION CONDITION REPORT', {
     x: marginLeft + 10,
     y: y - 20,
@@ -151,7 +113,6 @@ export function drawPageHeader(
     color: COLOURS.white,
   })
 
-  // Subtitle
   page.drawText('In accordance with BS 7671', {
     x: marginLeft + 10,
     y: y - 33,
@@ -160,7 +121,6 @@ export function drawPageHeader(
     color: rgb(0.6, 0.6, 0.65),
   })
 
-  // Report number (right side)
   const reportText = `Report: ${reportNumber}`
   const reportWidth = fontBold.widthOfTextAtSize(reportText, FONT.reportNumber)
   page.drawText(reportText, {
@@ -171,7 +131,6 @@ export function drawPageHeader(
     color: COLOURS.accent,
   })
 
-  // Page number (right side, below report)
   const pageText = `Page ${pageNum} of ${totalPages}`
   const pageWidth = font.widthOfTextAtSize(pageText, FONT.pageNumber)
   page.drawText(pageText, {
@@ -182,14 +141,9 @@ export function drawPageHeader(
     color: rgb(0.6, 0.6, 0.65),
   })
 
-  // Return Y position below header
   return y - SPACING.pageHeaderHeight - SPACING.sectionGap
 }
 
-/**
- * Draw a section header bar (e.g. "SECTION A — CLIENT DETAILS").
- * Returns Y position below the header.
- */
 export function drawSectionHeader(
   page: PDFPage,
   fontBold: PDFFont,
@@ -215,10 +169,6 @@ export function drawSectionHeader(
   return y - SPACING.sectionHeaderHeight - 6
 }
 
-/**
- * Draw a labelled field: "Label: Value" on one line.
- * Returns Y position after the field.
- */
 export function drawField(
   page: PDFPage,
   font: PDFFont,
@@ -237,7 +187,6 @@ export function drawField(
   const labelWidth = options?.labelWidth ?? 130
   const valueColour = options?.valueColour ?? COLOURS.text
 
-  // Label
   page.drawText(label, {
     x,
     y,
@@ -246,7 +195,6 @@ export function drawField(
     color: COLOURS.muted,
   })
 
-  // Value
   page.drawText(value || '—', {
     x: x + labelWidth,
     y,
@@ -258,10 +206,6 @@ export function drawField(
   return y - SPACING.fieldRowGap
 }
 
-/**
- * Draw two fields side by side on one row.
- * Returns Y position after the row.
- */
 export function drawFieldPair(
   page: PDFPage,
   font: PDFFont,
@@ -286,9 +230,6 @@ export function drawFieldPair(
   return y - SPACING.fieldRowGap
 }
 
-/**
- * Draw a horizontal rule (thin line).
- */
 export function drawHorizontalRule(
   page: PDFPage,
   y: number,
@@ -302,10 +243,6 @@ export function drawHorizontalRule(
   })
 }
 
-/**
- * Draw a table header row.
- * Returns Y position below the header.
- */
 export function drawTableHeader(
   page: PDFPage,
   fontBold: PDFFont,
@@ -314,7 +251,6 @@ export function drawTableHeader(
 ): number {
   const rowY = y - SPACING.tableHeaderHeight
 
-  // Header background
   page.drawRectangle({
     x: PAGE.marginLeft,
     y: rowY,
@@ -323,7 +259,6 @@ export function drawTableHeader(
     color: COLOURS.sectionBg,
   })
 
-  // Column labels
   let colX = PAGE.marginLeft
   for (const col of columns) {
     const textWidth = fontBold.widthOfTextAtSize(col.label, FONT.tableHeader)
@@ -349,10 +284,6 @@ export function drawTableHeader(
   return rowY
 }
 
-/**
- * Draw a table body row.
- * Returns Y position below the row.
- */
 export function drawTableRow(
   page: PDFPage,
   font: PDFFont,
@@ -368,7 +299,6 @@ export function drawTableRow(
   const rowHeight = options?.rowHeight ?? SPACING.tableRowHeight
   const rowY = y - rowHeight
 
-  // Alternating row background
   if (options?.isAlt) {
     page.drawRectangle({
       x: PAGE.marginLeft,
@@ -379,7 +309,6 @@ export function drawTableRow(
     })
   }
 
-  // Bottom border
   page.drawLine({
     start: { x: PAGE.marginLeft, y: rowY },
     end: { x: PAGE.width - PAGE.marginRight, y: rowY },
@@ -387,13 +316,12 @@ export function drawTableRow(
     color: COLOURS.border,
   })
 
-  // Cell values
   let colX = PAGE.marginLeft
   for (let i = 0; i < columns.length; i++) {
     const col = columns[i]
+    if (!col) continue
     const text = values[i] ?? ''
 
-    // Truncate text to fit column
     let displayText = text
     const maxTextWidth = col.width - 6
     while (
@@ -429,9 +357,6 @@ export function drawTableRow(
   return rowY
 }
 
-/**
- * Draw page footer with CertVoice branding.
- */
 export function drawPageFooter(
   page: PDFPage,
   font: PDFFont
@@ -449,10 +374,6 @@ export function drawPageFooter(
   })
 }
 
-/**
- * Wrap text to fit within a given width.
- * Returns array of lines.
- */
 export function wrapText(
   text: string,
   font: PDFFont,
@@ -480,17 +401,10 @@ export function wrapText(
   return lines
 }
 
-/**
- * Check if there's enough space on the current page for the given height.
- * Returns true if a new page is needed.
- */
 export function needsNewPage(y: number, requiredHeight: number): boolean {
   return y - requiredHeight < PAGE.marginBottom
 }
 
-/**
- * Get the classification code colour.
- */
 export function getCodeColour(code: string): Color {
   switch (code) {
     case 'C1': return COLOURS.c1
