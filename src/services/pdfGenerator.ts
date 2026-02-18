@@ -825,9 +825,10 @@ export async function generateEICRPdf(cert: EICRCertificate): Promise<Uint8Array
 // ============================================================
 
 /**
- * Generate and trigger browser download of the EICR PDF.
+ * Generate EICR PDF and return a blob URL for download.
+ * Caller is responsible for showing a download link and revoking the URL.
  */
-export async function downloadEICRPdf(cert: EICRCertificate): Promise<void> {
+export async function generateEICRBlobUrl(cert: EICRCertificate): Promise<{ url: string; filename: string }> {
   const pdfBytes = await generateEICRPdf(cert)
 
   const buffer = new ArrayBuffer(pdfBytes.byteLength)
@@ -837,20 +838,5 @@ export async function downloadEICRPdf(cert: EICRCertificate): Promise<void> {
   const url = URL.createObjectURL(blob)
   const filename = `EICR-${cert.reportNumber || cert.id}.pdf`
 
-  // Use window.open — more reliable than anchor click
-  // when user gesture has expired during async operations
-  const newWindow = window.open(url, '_blank')
-
-  if (!newWindow) {
-    // Popup blocked — fall back to anchor method
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-  }
-
-  // Delay revoke to give browser time to start the download
-  setTimeout(() => URL.revokeObjectURL(url), 10000)
+  return { url, filename }
 }
