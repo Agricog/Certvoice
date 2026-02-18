@@ -208,12 +208,37 @@ export default function InspectionCapture() {
           }
 
           if (loaded) {
+            // Merge with local data so we don't lose offline circuits/observations
+            try {
+              const local = await getFromLocal(certIdFromUrl!)
+              if (local?.data) {
+                const localData = local.data
+                // Keep local circuits/observations if API has none
+                if (!loaded.circuits?.length && localData.circuits?.length) {
+                  loaded.circuits = localData.circuits
+                }
+                if (!loaded.observations?.length && localData.observations?.length) {
+                  loaded.observations = localData.observations
+                }
+                if (!loaded.inspectionSchedule?.length && localData.inspectionSchedule?.length) {
+                  loaded.inspectionSchedule = localData.inspectionSchedule
+                }
+                if (!loaded.supplyCharacteristics && localData.supplyCharacteristics) {
+                  loaded.supplyCharacteristics = localData.supplyCharacteristics
+                }
+                if (!loaded.declaration && localData.declaration) {
+                  loaded.declaration = localData.declaration
+                }
+              }
+            } catch {
+              // Local read failed — continue with API data only
+            }
             // Ensure boards exist
             if (!loaded.distributionBoards?.length) {
               loaded.distributionBoards = DEFAULT_BOARDS
             }
             setCertificate(loaded)
-            await saveToLocal(certIdFromUrl, loaded, false)
+            await saveToLocal(certIdFromUrl!, loaded, false)
             setPageState('ready')
             return
           }
