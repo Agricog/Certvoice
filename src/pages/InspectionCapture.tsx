@@ -1198,7 +1198,7 @@ export default function InspectionCapture() {
               onSyncNow={() => syncServiceRef.current?.syncNow()}
             />
           )}
-          {pdfReady ? (
+          {pdfReady ? (<>
             <a
               href={pdfReady.url}
               download={pdfReady.filename}
@@ -1221,7 +1221,7 @@ export default function InspectionCapture() {
             >
               <Share2 className="w-4 h-4" />
             </button>
-          ) : (
+            </>) : (
             <button
               type="button"
               onClick={handleExportPdf}
