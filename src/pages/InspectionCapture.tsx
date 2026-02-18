@@ -37,6 +37,7 @@ import type {
   CircuitDetail,
   Observation,
   Declaration,
+  TestInstruments,
   DistributionBoardHeader,
   SupplyCharacteristics,
   InstallationParticulars,
@@ -50,6 +51,7 @@ import SupplyDetails from '../components/SupplyDetails'
 import InspectionChecklist from '../components/InspectionChecklist'
 import SyncIndicator from '../components/SyncIndicator'
 import DeclarationForm, { EMPTY_DECLARATION } from '../components/DeclarationForm'
+import TestInstrumentsForm, { EMPTY_INSTRUMENTS } from '../components/TestInstrumentsForm'
 import useEngineerProfile from '../hooks/useEngineerProfile'
 import { captureError } from '../utils/errorTracking'
 import { trackCircuitCaptured, trackObservationCaptured, trackChecklistProgress } from '../utils/analytics'
@@ -573,6 +575,20 @@ export default function InspectionCapture() {
   }, [persistCertificate])
 
   // ============================================================
+  // HANDLERS: TEST INSTRUMENTS
+  // ============================================================
+
+  const testInstruments = certificate.testInstruments ?? EMPTY_INSTRUMENTS
+
+  const handleInstrumentsChange = useCallback((updated: TestInstruments) => {
+    setCertificate((prev) => {
+      const cert = { ...prev, testInstruments: updated, updatedAt: new Date().toISOString() }
+      persistCertificate(cert)
+      return cert
+    })
+  }, [persistCertificate])
+
+  // ============================================================
   // HANDLERS: BOARDS
   // ============================================================
 
@@ -934,17 +950,25 @@ export default function InspectionCapture() {
   )
 
   // ============================================================
-  // RENDER: DECLARATION TAB
+  // RENDER: DECLARATION TAB (Test Instruments + Declaration)
   // ============================================================
 
   const renderDeclarationTab = () => (
-    <DeclarationForm
-      certificateId={certificate.id ?? ''}
-      declaration={declaration}
-      onDeclarationChange={handleDeclarationChange}
-      engineerProfile={engineerProfile}
-      disabled={certificate.status === 'ISSUED'}
-    />
+    <div className="space-y-4">
+      <TestInstrumentsForm
+        instruments={testInstruments}
+        onInstrumentsChange={handleInstrumentsChange}
+        engineerProfile={engineerProfile}
+        disabled={certificate.status === 'ISSUED'}
+      />
+      <DeclarationForm
+        certificateId={certificate.id ?? ''}
+        declaration={declaration}
+        onDeclarationChange={handleDeclarationChange}
+        engineerProfile={engineerProfile}
+        disabled={certificate.status === 'ISSUED'}
+      />
+    </div>
   )
 
   // ============================================================
