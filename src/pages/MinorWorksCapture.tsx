@@ -17,10 +17,11 @@ import {
   UserCheck,
   Calendar,
 } from 'lucide-react';
-import { SyncIndicator } from '../components/SyncIndicator';
+import SyncIndicator from '../components/SyncIndicator';
 import { useApiToken } from '../hooks/useApiToken';
-import { useEngineerProfile } from '../hooks/useEngineerProfile';
+import useEngineerProfile from '../hooks/useEngineerProfile';
 import { saveCertificate, getCertificate } from '../services/offlineStore';
+import type { EICRCertificate } from '../types/eicr';
 import type {
   MinorWorksCertificate,
   MinorWorksDescription,
@@ -115,6 +116,19 @@ function getValidationWarnings(cert: MinorWorksCertificate): ValidationWarning[]
   return warnings;
 }
 
+// ── Helper: convert MinorWorksCertificate to storable data ──────
+// offlineStore expects Partial<EICRCertificate>. We cast through unknown
+// since IndexedDB doesn't enforce types — it stores whatever JS object we give it.
+function toStorable(cert: MinorWorksCertificate): Partial<EICRCertificate> {
+  return cert as unknown as Partial<EICRCertificate>;
+}
+
+function fromStorable(data: Partial<EICRCertificate>): MinorWorksCertificate | null {
+  const raw = data as unknown as Record<string, unknown>;
+  if (raw.certificateType !== 'MINOR_WORKS') return null;
+  return raw as unknown as MinorWorksCertificate;
+}
+
 // ── Component ───────────────────────────────────────────────────
 export default function MinorWorksCapture() {
   const { id } = useParams<{ id: string }>();
@@ -143,11 +157,14 @@ export default function MinorWorksCapture() {
       if (!id) return;
 
       // Try loading existing cert from IndexedDB
-      const existing = await getCertificate(id);
-      if (existing && existing.certificateType === 'MINOR_WORKS') {
-        setCert(existing as MinorWorksCertificate);
-        setLoading(false);
-        return;
+      const stored = await getCertificate(id);
+      if (stored) {
+        const mwCert = fromStorable(stored.data);
+        if (mwCert) {
+          setCert(mwCert);
+          setLoading(false);
+          return;
+        }
       }
 
       // Create new from navigation state
@@ -156,10 +173,12 @@ export default function MinorWorksCapture() {
       } | null;
 
       const emptyInstruments: TestInstruments = {
-        multifunctionTester: { make: '', model: '', serialNumber: '', calibrationDate: '' },
-        insulationResistanceTester: { make: '', model: '', serialNumber: '', calibrationDate: '' },
-        continuityTester: { make: '', model: '', serialNumber: '', calibrationDate: '' },
-        rcdTester: { make: '', model: '', serialNumber: '', calibrationDate: '' },
+        multifunctionInstrument: '',
+        insulationResistance: '',
+        continuity: '',
+        earthElectrodeResistance: '',
+        earthFaultLoopImpedance: '',
+        rcdTester: '',
       };
 
       const newCert: MinorWorksCertificate = {
@@ -170,29 +189,26 @@ export default function MinorWorksCapture() {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         clientDetails: navState?.clientDetails ?? {
-          name: '',
-          address: '',
-          postcode: '',
-          telephone: '',
-          email: '',
+          clientName: '',
+          clientAddress: '',
         },
         description: { ...EMPTY_MW_DESCRIPTION },
         installation: { ...EMPTY_MW_INSTALLATION },
         circuit: { ...EMPTY_MW_CIRCUIT },
         testResults: { ...EMPTY_MW_TEST_RESULTS },
-        testInstruments: profile?.defaultInstruments ?? emptyInstruments,
+        testInstruments: profile?.testInstruments ?? emptyInstruments,
         declaration: {
           ...EMPTY_MW_DECLARATION,
-          contractorName: profile?.company ?? '',
-          installerName: profile?.name ?? '',
-          schemeProvider: profile?.schemeProvider ?? '',
+          contractorName: profile?.companyName ?? '',
+          installerName: profile?.fullName ?? '',
+          schemeProvider: profile?.schemeBody ?? '',
           schemeMembershipNumber: profile?.registrationNumber ?? '',
         },
         nextInspection: { ...EMPTY_MW_NEXT_INSPECTION },
         schemeNotification: { ...EMPTY_SCHEME_NOTIFICATION },
       };
 
-      await saveCertificate(newCert);
+      await saveCertificate(id, toStorable(newCert));
       setCert(newCert);
       setLoading(false);
     }
@@ -208,7 +224,7 @@ export default function MinorWorksCapture() {
       if (saveTimeout.current) clearTimeout(saveTimeout.current);
       saveTimeout.current = setTimeout(async () => {
         const toSave = { ...updated, updatedAt: new Date().toISOString() };
-        await saveCertificate(toSave);
+        await saveCertificate(toSave.id, toStorable(toSave));
         setSyncStatus('saved');
       }, 400);
     },
@@ -288,8 +304,6 @@ export default function MinorWorksCapture() {
         setIsRecording(false);
         setVoiceTranscript('Processing...');
 
-        // TODO: Send to Deepgram → Claude extraction pipeline
-        // For now, placeholder — will wire to existing voice pipeline
         const formData = new FormData();
         formData.append('audio', audioBlob);
         formData.append('certificateType', 'MINOR_WORKS');
@@ -309,7 +323,6 @@ export default function MinorWorksCapture() {
           if (res.ok) {
             const data = await res.json();
             setVoiceTranscript(data.transcript || '');
-            // Apply extracted fields to circuit + test results
             if (data.circuit) updateCircuit(data.circuit);
             if (data.testResults) updateTestResults(data.testResults);
           } else {
@@ -365,7 +378,7 @@ export default function MinorWorksCapture() {
               <div>
                 <h1 className="text-base font-semibold text-amber-400">Minor Works</h1>
                 <p className="text-xs text-gray-500 truncate max-w-[200px]">
-                  {cert.clientDetails.address || 'New certificate'}
+                  {cert.clientDetails.clientAddress || 'New certificate'}
                 </p>
               </div>
             </div>
