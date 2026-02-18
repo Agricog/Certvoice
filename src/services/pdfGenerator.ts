@@ -835,13 +835,22 @@ export async function downloadEICRPdf(cert: EICRCertificate): Promise<void> {
 
   const blob = new Blob([buffer], { type: 'application/pdf' })
   const url = URL.createObjectURL(blob)
+  const filename = `EICR-${cert.reportNumber || cert.id}.pdf`
 
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `EICR-${cert.reportNumber || cert.id}.pdf`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
+  // Use window.open — more reliable than anchor click
+  // when user gesture has expired during async operations
+  const newWindow = window.open(url, '_blank')
 
-  URL.revokeObjectURL(url)
+  if (!newWindow) {
+    // Popup blocked — fall back to anchor method
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }
+
+  // Delay revoke to give browser time to start the download
+  setTimeout(() => URL.revokeObjectURL(url), 10000)
 }
