@@ -36,6 +36,8 @@ export interface AIExtractionRequest {
   existingCircuits: string[]
   /** Earthing type (needed for max Zs lookups) */
   earthingType: string | null
+  /** What type of data to extract */
+  type?: ExtractionType
 }
 
 /** Response from the Claude proxy worker */
