@@ -228,7 +228,7 @@ export function drawWrappedField(
   const lines = wrapText(displayValue, fontBold, FONT.value, maxValueWidth)
 
   for (let i = 0; i < lines.length; i++) {
-    page.drawText(lines[i], {
+    page.drawText(lines[i] ?? '', {
       x: valueX,
       y: y - i * 10,
       size: FONT.value,
