@@ -6,8 +6,9 @@
  *   /sign-in             — Clerk sign-in (public)
  *   /sign-up             — Clerk sign-up (public)
  *   /dashboard           — Dashboard (Home) (protected)
- *   /new                 — Start new EICR inspection (protected)
- *   /inspect/:id         — Main capture workflow (protected)
+ *   /new                 — Start new certificate (protected)
+ *   /inspect/:id         — EICR capture workflow (protected)
+ *   /minor-works/:id     — Minor Works capture workflow (protected)
  *   /certificates        — All completed certificates (protected)
  *   /settings            — Engineer profile, instruments, signature (protected)
  *   /subscription        — Stripe billing management (protected)
@@ -18,33 +19,28 @@
  *
  * @module App
  */
-
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
 import * as Sentry from '@sentry/react'
-
 // --- Page imports ---
 import LandingPage from './pages/LandingPage'
 import Home from './pages/Home'
 import NewInspection from './pages/NewInspection'
 import InspectionCapture from './pages/InspectionCapture'
+import MinorWorksCapture from './pages/MinorWorksCapture'
 import Certificates from './pages/Certificates'
 import Settings from './pages/Settings'
 import Subscription from './pages/Subscription'
 import AuthPage from './pages/AuthPage'
 import PrivacyPolicy from './pages/PrivacyPolicy'
 import TermsOfService from './pages/TermsOfService'
-
 // --- Component imports ---
 import BottomNav from './components/BottomNav'
 import ProtectedRoute from './components/ProtectedRoute'
-
 // --- Sentry-wrapped Routes for performance monitoring ---
 const SentryRoutes = Sentry.withSentryReactRouterV6Routing(Routes)
-
 // ============================================================
 // 404
 // ============================================================
-
 function NotFound() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-certvoice-bg">
@@ -61,11 +57,9 @@ function NotFound() {
     </div>
   )
 }
-
 // ============================================================
 // APP ROOT
 // ============================================================
-
 export default function App() {
   return (
     <BrowserRouter>
@@ -78,20 +72,18 @@ export default function App() {
           <Route path="/sign-up/*" element={<AuthPage mode="sign-up" />} />
           <Route path="/privacy" element={<PrivacyPolicy />} />
           <Route path="/terms" element={<TermsOfService />} />
-
           {/* Protected routes */}
           <Route path="/dashboard" element={<ProtectedRoute><Home /></ProtectedRoute>} />
           <Route path="/new" element={<ProtectedRoute><NewInspection /></ProtectedRoute>} />
           <Route path="/inspect/:id" element={<ProtectedRoute><InspectionCapture /></ProtectedRoute>} />
+          <Route path="/minor-works/:id" element={<ProtectedRoute><MinorWorksCapture /></ProtectedRoute>} />
           <Route path="/certificates" element={<ProtectedRoute><Certificates /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="/subscription" element={<ProtectedRoute><Subscription /></ProtectedRoute>} />
-
           {/* 404 */}
           <Route path="*" element={<NotFound />} />
         </SentryRoutes>
       </div>
-
       {/* Fixed bottom navigation — auto-hides on public + auth pages */}
       <BottomNav />
     </BrowserRouter>
