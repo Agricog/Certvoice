@@ -56,7 +56,7 @@ import { trackCircuitCaptured, trackObservationCaptured, trackChecklistProgress 
 import { saveCertificate as saveToLocal, getCertificate as getFromLocal } from '../services/offlineStore'
 import { getCertificate as getFromApi, createCertificate } from '../services/certificateApi'
 import { createSyncService } from '../services/syncService'
-import { downloadEICRPdf } from '../services/pdfGenerator'
+import { generateEICRBlobUrl } from '../services/pdfGenerator'
 
 // ============================================================
 // TYPES
@@ -142,18 +142,24 @@ export default function InspectionCapture() {
   const [editingObsIndex, setEditingObsIndex] = useState<number | null>(null)
   const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set())
   const [isExporting, setIsExporting] = useState(false)
+  const [pdfReady, setPdfReady] = useState<{ url: string; filename: string } | null>(null)
 
   // --- PDF export ---
   const handleExportPdf = useCallback(async () => {
+    if (pdfReady) {
+      URL.revokeObjectURL(pdfReady.url)
+      setPdfReady(null)
+    }
     setIsExporting(true)
     try {
-      await downloadEICRPdf(certificate as EICRCertificate)
+      const result = await generateEICRBlobUrl(certificate as EICRCertificate)
+      setPdfReady(result)
     } catch (err) {
       captureError(err, 'InspectionCapture.handleExportPdf')
     } finally {
       setIsExporting(false)
     }
-  }, [certificate])
+  }, [certificate, pdfReady])
 
   // --- Transcript toggle (view without entering edit mode) ---
   const toggleTranscript = useCallback((id: string) => {
@@ -987,17 +993,33 @@ export default function InspectionCapture() {
               onSyncNow={() => syncServiceRef.current?.syncNow()}
             />
           )}
-          <button
-            type="button"
-            onClick={handleExportPdf}
-            disabled={isExporting}
-            className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
-                       text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors
-                       disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Export PDF"
-          >
-            {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-          </button>
+          {pdfReady ? (
+            <a
+              href={pdfReady.url}
+              download={pdfReady.filename}
+              onClick={() => setTimeout(() => {
+                URL.revokeObjectURL(pdfReady.url)
+                setPdfReady(null)
+              }, 5000)}
+              className="w-8 h-8 rounded-lg border border-certvoice-green flex items-center justify-center
+                         text-certvoice-green hover:bg-certvoice-green/10 transition-colors animate-pulse"
+              title="Download PDF"
+            >
+              <Download className="w-4 h-4" />
+            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={handleExportPdf}
+              disabled={isExporting}
+              className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
+                         text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors
+                         disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Export PDF"
+            >
+              {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            </button>
+          )}
           <button
             type="button"
             onClick={handleSave}
