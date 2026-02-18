@@ -382,6 +382,26 @@ export default function InspectionCapture() {
 
   const hasUnsatisfactory = obsCounts.C1 > 0 || obsCounts.C2 > 0 || obsCounts.FI > 0
 
+  // Auto-set overall assessment based on observations
+  useEffect(() => {
+    const newAssessment = hasUnsatisfactory ? 'UNSATISFACTORY' : 'SATISFACTORY'
+    const currentAssessment = certificate.summaryOfCondition?.overallAssessment
+    if (observations.length > 0 && currentAssessment !== newAssessment) {
+      setCertificate((prev) => {
+        const cert = {
+          ...prev,
+          summaryOfCondition: {
+            generalCondition: prev.summaryOfCondition?.generalCondition ?? '',
+            overallAssessment: newAssessment as 'SATISFACTORY' | 'UNSATISFACTORY',
+          },
+          updatedAt: new Date().toISOString(),
+        }
+        persistCertificate(cert)
+        return cert
+      })
+    }
+  }, [hasUnsatisfactory, observations.length, certificate.summaryOfCondition?.overallAssessment, persistCertificate])
+
   // ============================================================
   // HANDLERS: CIRCUITS
   // ============================================================
