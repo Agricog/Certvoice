@@ -32,6 +32,8 @@ import {
   FileSignature,
   Download,
   Trash2,
+  Share2,
+} from 'lucide-react'
 } from 'lucide-react'
 import type {
   EICRCertificate,
@@ -61,7 +63,7 @@ import { saveCertificate as saveToLocal, getCertificate as getFromLocal } from '
 import { getCertificate as getFromApi, createCertificate } from '../services/certificateApi'
 import { createSyncService } from '../services/syncService'
 import { generateEICRBlobUrl } from '../services/pdfGenerator'
-
+import { createDefaultSchedule } from '../data/bs7671Schedule'
 // ============================================================
 // TYPES
 // ============================================================
@@ -166,6 +168,53 @@ export default function InspectionCapture() {
       setIsExporting(false)
     }
   }, [certificate, pdfReady])
+
+  // --- Share PDF (Web Share API) ---
+  const handleSharePdf = useCallback(async () => {
+    if (!pdfReady) return
+    try {
+      const response = await fetch(pdfReady.url)
+      const blob = await response.blob()
+      const file = new File([blob], pdfReady.filename, { type: 'application/pdf' })
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `EICR Report — ${certificate.reportNumber ?? ''}`,
+          text: `EICR inspection report for ${certificate.installationDetails?.installationAddress ?? 'property'}`,
+        })
+      } else {
+        // Fallback: copy download link (mobile browsers that don't support file sharing)
+        const link = document.createElement('a')
+        link.href = `mailto:?subject=EICR Report ${certificate.reportNumber ?? ''}&body=Please find the EICR report attached.`
+        link.click()
+      }
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        captureError(err, 'InspectionCapture.handleSharePdf')
+      }
+    }
+  }, [pdfReady, certificate.reportNumber, certificate.installationDetails?.installationAddress])
+
+  // --- Validation warnings ---
+  const validationWarnings = useMemo(() => {
+    const w: string[] = []
+    if (!circuits.length) w.push('No circuits recorded')
+    if (!supply.earthingType) w.push('Earthing type not set')
+    if (supply.ze === null || supply.ze === undefined) w.push('Ze not measured')
+    if (supply.ipf === null || supply.ipf === undefined) w.push('Ipf not measured')
+    if (!supply.supplyPolarityConfirmed) w.push('Supply polarity not confirmed')
+    const scheduleComplete = inspectionItems.filter((i) => i.outcome !== null).length
+    if (inspectionItems.length > 0 && scheduleComplete === 0) w.push('No inspection items completed')
+    else if (inspectionItems.length > 0 && scheduleComplete < inspectionItems.length) {
+      w.push(`Inspection schedule ${scheduleComplete}/${inspectionItems.length} complete`)
+    }
+    const decl = certificate.declaration
+    if (!decl?.inspectorName) w.push('Inspector name not set')
+    if (!decl?.dateInspected) w.push('Inspection date not set')
+    return w
+  }, [circuits.length, supply, inspectionItems, certificate.declaration])
+
+  // --- Transcript toggle (view without entering edit mode) ---
 
   // --- Transcript toggle (view without entering edit mode) ---
   const toggleTranscript = useCallback((id: string) => {
@@ -401,6 +450,19 @@ export default function InspectionCapture() {
       })
     }
   }, [hasUnsatisfactory, observations.length, certificate.summaryOfCondition?.overallAssessment, persistCertificate])
+  // Auto-populate BS 7671 inspection schedule if empty
+  useEffect(() => {
+    if (pageState === 'ready' && certificate.id && (!certificate.inspectionSchedule || certificate.inspectionSchedule.length === 0)) {
+      const items = createDefaultSchedule()
+      setCertificate((prev) => {
+        if (prev.inspectionSchedule && prev.inspectionSchedule.length > 0) return prev
+        const cert = { ...prev, inspectionSchedule: items, updatedAt: new Date().toISOString() }
+        persistCertificate(cert)
+        return cert
+      })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageState, certificate.id])
 
   // ============================================================
   // HANDLERS: CIRCUITS
@@ -1151,6 +1213,15 @@ export default function InspectionCapture() {
             >
               <Download className="w-4 h-4" />
             </a>
+            <button
+              type="button"
+              onClick={handleSharePdf}
+              className="w-8 h-8 rounded-lg border border-certvoice-accent flex items-center justify-center
+                         text-certvoice-accent hover:bg-certvoice-accent/10 transition-colors"
+              title="Share PDF"
+            >
+              <Share2 className="w-4 h-4" />
+            </button>
           ) : (
             <button
               type="button"
@@ -1182,6 +1253,23 @@ export default function InspectionCapture() {
             <span className="text-xs text-certvoice-red font-semibold">
               UNSATISFACTORY — C1/C2/FI observations recorded
             </span>
+          </div>
+        )}
+
+        {/* ---- Validation Warnings ---- */}
+        {validationWarnings.length > 0 && (
+          <div className="cv-panel border-certvoice-amber/30 bg-certvoice-amber/5 p-3 space-y-1">
+            <div className="flex items-center gap-2 text-xs font-semibold text-certvoice-amber">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              Missing information ({validationWarnings.length})
+            </div>
+            <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {validationWarnings.map((w) => (
+                <span key={w} className="text-[10px] bg-certvoice-amber/10 text-certvoice-amber px-2 py-0.5 rounded">
+                  {w}
+                </span>
+              ))}
+            </div>
           </div>
         )}
 
