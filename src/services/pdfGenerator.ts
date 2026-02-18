@@ -633,7 +633,7 @@ function drawCircuitPages(
   y = drawSectionHeader(page, fonts.bold, y, 'Schedule of Circuit Details and Test Results')
 
   const ti = cert.testInstruments
-  if (ti.multifunctionInstrument) {
+  if (ti?.multifunctionInstrument) {
     page.drawText(`Instruments: ${ti.multifunctionInstrument}`, {
       x: PAGE.marginLeft,
       y,
