@@ -776,46 +776,42 @@ function drawCircuitPages(
 
 /**
  * Generate a complete EICR PDF from certificate data.
- * Returns raw bytes — use downloadEICRPdf() for browser download.
+ * Returns raw bytes — use generateEICRBlobUrl() for browser download.
  */
 export async function generateEICRPdf(cert: EICRCertificate): Promise<Uint8Array> {
-  alert('PDF-A: Creating document')
   const pdfDoc = await PDFDocument.create()
   const regular = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
   const fonts: FontSet = { regular, bold }
   pdfDoc.setTitle(`EICR Report ${cert.reportNumber}`)
-  pdfDoc.setAuthor(cert.declaration.inspectorName || 'CertVoice')
+  pdfDoc.setAuthor(cert.declaration?.inspectorName || 'CertVoice')
   pdfDoc.setSubject('Electrical Installation Condition Report')
   pdfDoc.setCreator('CertVoice — certvoice.co.uk')
   pdfDoc.setCreationDate(new Date())
-  alert('PDF-B: Drawing page 1')
+  // Page 1: Sections A-D
   drawClientInstallationPage(pdfDoc, cert, fonts)
-  alert('PDF-C: Fetching signatures')
+  // Fetch signatures (graceful fallback if offline)
   const [inspSig, qsSig] = await Promise.all([
-    cert.declaration.inspectorSignatureKey
+    cert.declaration?.inspectorSignatureKey
       ? fetchSignaturePng(cert.declaration.inspectorSignatureKey)
       : Promise.resolve(null),
-    cert.declaration.qsSignatureKey
+    cert.declaration?.qsSignatureKey
       ? fetchSignaturePng(cert.declaration.qsSignatureKey)
       : Promise.resolve(null),
   ])
-  alert('PDF-D: Drawing declaration page')
+  // Page 2: Sections E-G (declaration + signatures)
   await drawDeclarationPage(pdfDoc, cert, fonts, { inspector: inspSig, qs: qsSig })
-  alert('PDF-E: Drawing supply page')
+  // Page 3: Sections I-J
   drawSupplyPage(pdfDoc, cert, fonts)
-  alert('PDF-F: Drawing observations')
+  // Dynamic pages
   let nextPage = 4
   nextPage = drawObservationsPages(pdfDoc, cert, fonts, nextPage)
-  alert('PDF-G: Drawing inspections')
   nextPage = drawInspectionPages(pdfDoc, cert, fonts, nextPage)
-  alert('PDF-H: Drawing circuits')
   drawCircuitPages(pdfDoc, cert, fonts, nextPage)
-  alert('PDF-I: Saving PDF')
   const pdfBytes = await pdfDoc.save()
-  alert('PDF-J: Done - ' + pdfBytes.byteLength + ' bytes')
   return pdfBytes
 }
+
 // ============================================================
 // BROWSER DOWNLOAD
 // ============================================================
@@ -825,14 +821,11 @@ export async function generateEICRPdf(cert: EICRCertificate): Promise<Uint8Array
  * Caller is responsible for showing a download link and revoking the URL.
  */
 export async function generateEICRBlobUrl(cert: EICRCertificate): Promise<{ url: string; filename: string }> {
-  alert('BLOB-1: Entered generateEICRBlobUrl')
   const pdfBytes = await generateEICRPdf(cert)
-  alert('BLOB-2: Got PDF bytes')
   const buffer = new ArrayBuffer(pdfBytes.byteLength)
   new Uint8Array(buffer).set(pdfBytes)
   const blob = new Blob([buffer], { type: 'application/pdf' })
   const url = URL.createObjectURL(blob)
   const filename = `EICR-${cert.reportNumber || cert.id}.pdf`
-  alert('BLOB-3: URL created')
   return { url, filename }
 }
