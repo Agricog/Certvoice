@@ -18,6 +18,10 @@
  *   - photo:     JPEG/PNG, max 5MB (inspection evidence photos)
  *   - signature: PNG, max 2MB (digital signatures for Section G)
  *
+ * Key Formats (both supported for backwards compatibility):
+ *   - Current: {engineerId}/{fileType}s/{certificateId}/{timestamp}-{filename}
+ *   - Legacy:  {fileType}s/{engineerId}/{timestamp}.{ext}
+ *
  * Security:
  *   - Clerk JWT verification via JWKS
  *   - Upstash rate limiting (30 uploads/hour per engineer)
@@ -112,6 +116,9 @@ const ALL_ALLOWED_TYPES = ['image/jpeg', 'image/png']
 // Max file size across all types
 const MAX_FILE_SIZE = 5 * 1024 * 1024
 
+// Known file-type path segments used in key validation
+const KNOWN_FILE_SEGMENTS = ['photos', 'signatures']
+
 // ============================================================
 // GUARD HELPERS
 // ============================================================
@@ -128,6 +135,46 @@ function structuredLog(log: StructuredLog): void {
     service: 'certvoice-r2-upload',
     timestamp: new Date().toISOString(),
   }))
+}
+
+// ============================================================
+// OWNERSHIP VALIDATION
+// ============================================================
+
+/**
+ * Verify that a file key belongs to the authenticated engineer.
+ *
+ * Supports two key formats for backwards compatibility:
+ *
+ *   Current format: {engineerId}/signatures/{certId}/{timestamp}-{filename}
+ *                   {engineerId}/photos/{certId}/{timestamp}-{filename}
+ *
+ *   Legacy format:  signatures/{engineerId}/{timestamp}.{ext}
+ *                   photos/{engineerId}/{timestamp}.{ext}
+ *
+ * Rules:
+ *   - The engineerId must appear as an exact, complete path segment
+ *   - The key must also contain a known file-type segment (photos/signatures)
+ *   - Both conditions prevent path traversal and cross-tenant access
+ */
+function isFileOwner(key: string, engineerId: string): boolean {
+  if (!key || !engineerId) return false
+
+  const segments = key.split('/')
+
+  // Current format: first segment is engineerId
+  // e.g. "user_abc123/signatures/cert-uuid/1234567890-file.png"
+  if (segments[0] === engineerId && segments.length >= 3) {
+    return KNOWN_FILE_SEGMENTS.includes(segments[1] ?? '')
+  }
+
+  // Legacy format: first segment is file type, second is engineerId
+  // e.g. "signatures/user_abc123/1234567890.png"
+  if (segments[1] === engineerId && segments.length >= 3) {
+    return KNOWN_FILE_SEGMENTS.includes(segments[0] ?? '')
+  }
+
+  return false
 }
 
 // ============================================================
@@ -218,6 +265,7 @@ function corsHeaders(origin: string, allowedOrigin: string): Record<string, stri
     'Access-Control-Allow-Origin': isAllowed ? origin : '',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Max-Age': '86400',
   }
 }
@@ -321,8 +369,8 @@ async function handleUploadBinary(
   cors: Record<string, string>,
   requestId: string
 ): Promise<Response> {
-  // Security: key must start with this engineer's ID
-  if (!key.startsWith(`${engineerId}/`)) {
+  // Security: verify file ownership
+  if (!isFileOwner(key, engineerId)) {
     return jsonResponse({ error: 'Access denied', requestId }, 403, cors)
   }
 
@@ -371,7 +419,7 @@ async function handleDownloadUrl(
     return jsonResponse({ error: 'Missing file key' }, 400, cors)
   }
 
-  if (!key.startsWith(`${engineerId}/`)) {
+  if (!isFileOwner(key, engineerId)) {
     return jsonResponse({ error: 'Forbidden' }, 403, cors)
   }
 
@@ -409,7 +457,7 @@ async function handleDeleteFile(
     return jsonResponse({ error: 'Missing file key' }, 400, cors)
   }
 
-  if (!key.startsWith(`${engineerId}/`)) {
+  if (!isFileOwner(key, engineerId)) {
     return jsonResponse({ error: 'Forbidden' }, 403, cors)
   }
 
