@@ -1,18 +1,21 @@
 /**
  * CertVoice — NewInspection Page
  *
- * Multi-step wizard for starting a new EICR inspection.
- * Captures Sections A-D before moving to the main capture workflow.
+ * Starts with certificate type selection (EICR or Minor Works).
  *
- * Steps:
+ * EICR flow: Multi-step wizard (Sections A-D) → InspectionCapture
+ * Minor Works flow: Client details only → MinorWorksCapture
+ *
+ * Steps (EICR):
  *   1. Section A: Client Details
  *   2. Section B: Reason for Report
  *   3. Section C: Installation Details
  *   4. Section D: Extent & Limitations
  *   5. Review & Create
  *
- * On completion, creates a new EICRCertificate in DRAFT status
- * and navigates to InspectionCapture.
+ * Steps (Minor Works):
+ *   1. Client Details
+ *   2. Review & Create
  */
 
 import { useState, useCallback } from 'react'
@@ -28,6 +31,7 @@ import {
   ClipboardList,
   AlertTriangle,
   Zap,
+  Wrench,
 } from 'lucide-react'
 import type {
   EICRCertificate,
@@ -39,6 +43,7 @@ import type {
   PremisesType,
   CertificateStatus,
 } from '../types/eicr'
+import type { CertificateType } from '../types/minorWorks'
 import { validateInput } from '../utils/validation'
 import { sanitizeText as _sanitizeText } from '../utils/sanitization'
 const sanitizeText = (input: string): string => String(_sanitizeText(input) ?? '')
@@ -48,6 +53,21 @@ import { trackCertificateCreated } from '../utils/analytics'
 // ============================================================
 // CONSTANTS
 // ============================================================
+
+const CERT_TYPES: { value: CertificateType; label: string; description: string; icon: React.ElementType }[] = [
+  {
+    value: 'EICR',
+    label: 'EICR',
+    description: 'Electrical Installation Condition Report — periodic inspections, landlord checks',
+    icon: ClipboardList,
+  },
+  {
+    value: 'MINOR_WORKS',
+    label: 'Minor Works',
+    description: 'Minor Electrical Installation Works Certificate — socket additions, light fittings, small jobs',
+    icon: Wrench,
+  },
+]
 
 const REPORT_PURPOSES: { value: ReportPurpose; label: string }[] = [
   { value: 'PERIODIC', label: 'Periodic Inspection' },
@@ -65,11 +85,16 @@ const PREMISES_TYPES: { value: PremisesType; label: string }[] = [
   { value: 'OTHER', label: 'Other' },
 ]
 
-const STEPS = [
+const EICR_STEPS = [
   { label: 'Client', icon: User },
   { label: 'Reason', icon: FileText },
   { label: 'Installation', icon: Building2 },
   { label: 'Extent', icon: ClipboardList },
+  { label: 'Review', icon: Check },
+] as const
+
+const MW_STEPS = [
+  { label: 'Client', icon: User },
   { label: 'Review', icon: Check },
 ] as const
 
@@ -88,22 +113,25 @@ const DEFAULT_LIMITATIONS =
 
 export default function NewInspection() {
   const navigate = useNavigate()
+
+  // --- Certificate type (null = not yet selected) ---
+  const [certType, setCertType] = useState<CertificateType | null>(null)
   const [currentStep, setCurrentStep] = useState(0)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
-  // --- Section A: Client Details ---
+  // --- Section A: Client Details (shared) ---
   const [clientDetails, setClientDetails] = useState<ClientDetails>({
     clientName: '',
     clientAddress: '',
   })
 
-  // --- Section B: Reason for Report ---
+  // --- Section B: Reason for Report (EICR only) ---
   const [reportReason, setReportReason] = useState<ReportReason>({
     purpose: 'PERIODIC',
     inspectionDates: [new Date().toISOString().split('T')[0] ?? ''],
   })
 
-  // --- Section C: Installation Details ---
+  // --- Section C: Installation Details (EICR only) ---
   const [installationDetails, setInstallationDetails] = useState<InstallationDetails>({
     installationAddress: '',
     occupier: '',
@@ -116,13 +144,15 @@ export default function NewInspection() {
     dateOfLastInspection: null,
   })
 
-  // --- Section D: Extent & Limitations ---
+  // --- Section D: Extent & Limitations (EICR only) ---
   const [extentAndLimitations, setExtentAndLimitations] = useState<ExtentAndLimitations>({
     extentCovered: DEFAULT_EXTENT,
     agreedLimitations: DEFAULT_LIMITATIONS,
     agreedWith: '',
     operationalLimitations: '',
   })
+
+  const steps = certType === 'MINOR_WORKS' ? MW_STEPS : EICR_STEPS
 
   // ============================================================
   // VALIDATION
@@ -131,9 +161,9 @@ export default function NewInspection() {
   const validateStep = useCallback((step: number): boolean => {
     const newErrors: Record<string, string> = {}
 
-    switch (step) {
-      case 0: {
-        // Section A
+    if (certType === 'MINOR_WORKS') {
+      // MW flow: step 0 = client, step 1 = review
+      if (step === 0) {
         if (!clientDetails.clientName.trim()) {
           newErrors.clientName = 'Client name is required'
         }
@@ -144,46 +174,59 @@ export default function NewInspection() {
         if (!nameResult.isValid) {
           newErrors.clientName = Object.values(nameResult.errors)[0] ?? 'Invalid input'
         }
-        break
       }
-      case 1: {
-        // Section B
-        if (!reportReason.purpose) {
-          newErrors.purpose = 'Select a reason'
+    } else {
+      // EICR flow: original 5-step validation
+      switch (step) {
+        case 0: {
+          if (!clientDetails.clientName.trim()) {
+            newErrors.clientName = 'Client name is required'
+          }
+          if (!clientDetails.clientAddress.trim()) {
+            newErrors.clientAddress = 'Client address is required'
+          }
+          const nameResult = validateInput(clientDetails.clientName, 'text', 200)
+          if (!nameResult.isValid) {
+            newErrors.clientName = Object.values(nameResult.errors)[0] ?? 'Invalid input'
+          }
+          break
         }
-        if (reportReason.inspectionDates.length === 0 || !reportReason.inspectionDates[0]) {
-          newErrors.inspectionDate = 'Inspection date is required'
+        case 1: {
+          if (!reportReason.purpose) {
+            newErrors.purpose = 'Select a reason'
+          }
+          if (reportReason.inspectionDates.length === 0 || !reportReason.inspectionDates[0]) {
+            newErrors.inspectionDate = 'Inspection date is required'
+          }
+          break
         }
-        break
-      }
-      case 2: {
-        // Section C
-        if (!installationDetails.installationAddress.trim()) {
-          newErrors.installationAddress = 'Installation address is required'
+        case 2: {
+          if (!installationDetails.installationAddress.trim()) {
+            newErrors.installationAddress = 'Installation address is required'
+          }
+          if (!installationDetails.premisesType) {
+            newErrors.premisesType = 'Select premises type'
+          }
+          if (installationDetails.premisesType === 'OTHER' && !installationDetails.otherDescription?.trim()) {
+            newErrors.otherDescription = 'Please describe the premises'
+          }
+          break
         }
-        if (!installationDetails.premisesType) {
-          newErrors.premisesType = 'Select premises type'
+        case 3: {
+          if (!extentAndLimitations.extentCovered.trim()) {
+            newErrors.extentCovered = 'Extent of inspection is required'
+          }
+          if (!extentAndLimitations.agreedLimitations.trim()) {
+            newErrors.agreedLimitations = 'Agreed limitations are required'
+          }
+          break
         }
-        if (installationDetails.premisesType === 'OTHER' && !installationDetails.otherDescription?.trim()) {
-          newErrors.otherDescription = 'Please describe the premises'
-        }
-        break
-      }
-      case 3: {
-        // Section D
-        if (!extentAndLimitations.extentCovered.trim()) {
-          newErrors.extentCovered = 'Extent of inspection is required'
-        }
-        if (!extentAndLimitations.agreedLimitations.trim()) {
-          newErrors.agreedLimitations = 'Agreed limitations are required'
-        }
-        break
       }
     }
 
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
-  }, [clientDetails, reportReason, installationDetails, extentAndLimitations])
+  }, [certType, clientDetails, reportReason, installationDetails, extentAndLimitations])
 
   // ============================================================
   // NAVIGATION
@@ -191,17 +234,21 @@ export default function NewInspection() {
 
   const handleNext = useCallback(() => {
     if (!validateStep(currentStep)) return
-    setCurrentStep((prev) => Math.min(prev + 1, STEPS.length - 1))
-  }, [currentStep, validateStep])
+    setCurrentStep((prev) => Math.min(prev + 1, steps.length - 1))
+  }, [currentStep, validateStep, steps.length])
 
   const handleBack = useCallback(() => {
     setErrors({})
-    setCurrentStep((prev) => Math.max(prev - 1, 0))
-  }, [])
+    if (currentStep === 0) {
+      // Go back to cert type selection
+      setCertType(null)
+    } else {
+      setCurrentStep((prev) => Math.max(prev - 1, 0))
+    }
+  }, [currentStep])
 
   const handleStepClick = useCallback(
     (step: number) => {
-      // Only allow going back, or to current step
       if (step <= currentStep) {
         setErrors({})
         setCurrentStep(step)
@@ -210,11 +257,17 @@ export default function NewInspection() {
     [currentStep]
   )
 
+  const handleCertTypeSelect = useCallback((type: CertificateType) => {
+    setCertType(type)
+    setCurrentStep(0)
+    setErrors({})
+  }, [])
+
   // ============================================================
   // CREATE CERTIFICATE
   // ============================================================
 
-  const handleCreate = useCallback(() => {
+  const handleCreateEICR = useCallback(() => {
     try {
       const status: CertificateStatus = 'DRAFT'
       const now = new Date().toISOString()
@@ -261,14 +314,28 @@ export default function NewInspection() {
       }
 
       trackCertificateCreated(installationDetails.premisesType)
-
-      // TODO: Save to database via API
-      // For now, pass via navigation state
       navigate(`/inspect/${certificate.id}`, { state: { certificate } })
     } catch (error) {
-      captureError(error, 'NewInspection.handleCreate')
+      captureError(error, 'NewInspection.handleCreateEICR')
     }
   }, [clientDetails, reportReason, installationDetails, extentAndLimitations, navigate])
+
+  const handleCreateMinorWorks = useCallback(() => {
+    try {
+      const id = crypto.randomUUID()
+      const clientDetailsClean: ClientDetails = {
+        clientName: sanitizeText(clientDetails.clientName) ?? '',
+        clientAddress: sanitizeText(clientDetails.clientAddress) ?? '',
+      }
+
+      trackCertificateCreated('MINOR_WORKS')
+      navigate(`/minor-works/${id}`, { state: { clientDetails: clientDetailsClean } })
+    } catch (error) {
+      captureError(error, 'NewInspection.handleCreateMinorWorks')
+    }
+  }, [clientDetails, navigate])
+
+  const handleCreate = certType === 'MINOR_WORKS' ? handleCreateMinorWorks : handleCreateEICR
 
   // ============================================================
   // FIELD HELPERS
@@ -290,12 +357,78 @@ export default function NewInspection() {
      ${errors[field] ? 'border-certvoice-red' : 'border-certvoice-border focus:border-certvoice-accent'}`
 
   // ============================================================
+  // RENDER: CERT TYPE SELECTOR
+  // ============================================================
+
+  if (certType === null) {
+    return (
+      <>
+        <Helmet>
+          <title>New Certificate | CertVoice</title>
+          <meta name="description" content="Start a new electrical certificate" />
+        </Helmet>
+
+        <div className="max-w-lg mx-auto px-4 py-6 space-y-6">
+          <div className="flex items-center gap-3">
+            <Link
+              to="/dashboard"
+              className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
+                         text-certvoice-muted hover:text-certvoice-text hover:border-certvoice-muted transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </Link>
+            <div>
+              <h1 className="text-lg font-bold text-certvoice-text flex items-center gap-2">
+                <Zap className="w-5 h-5 text-certvoice-accent" />
+                New Certificate
+              </h1>
+              <p className="text-xs text-certvoice-muted">
+                What type of certificate are you creating?
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {CERT_TYPES.map((ct) => {
+              const Icon = ct.icon
+              return (
+                <button
+                  key={ct.value}
+                  type="button"
+                  onClick={() => handleCertTypeSelect(ct.value)}
+                  className="w-full cv-panel flex items-start gap-4 p-4 hover:border-certvoice-accent
+                             transition-colors text-left cursor-pointer"
+                >
+                  <div className="w-10 h-10 rounded-lg bg-certvoice-accent/15 flex items-center justify-center shrink-0">
+                    <Icon className="w-5 h-5 text-certvoice-accent" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-certvoice-text">{ct.label}</p>
+                    <p className="text-xs text-certvoice-muted mt-0.5">{ct.description}</p>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-certvoice-muted shrink-0 mt-1" />
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="cv-panel p-3">
+            <p className="text-xs text-certvoice-muted text-center">
+              EIC (Electrical Installation Certificate) coming soon
+            </p>
+          </div>
+        </div>
+      </>
+    )
+  }
+
+  // ============================================================
   // RENDER: STEP INDICATOR
   // ============================================================
 
   const renderStepIndicator = () => (
     <div className="flex items-center justify-between mb-6">
-      {STEPS.map((step, index) => {
+      {steps.map((step, index) => {
         const StepIcon = step.icon
         const isActive = index === currentStep
         const isComplete = index < currentStep
@@ -339,14 +472,20 @@ export default function NewInspection() {
   )
 
   // ============================================================
-  // RENDER: STEP 0 — Section A (Client Details)
+  // RENDER: CLIENT DETAILS (shared by both flows)
   // ============================================================
 
-  const renderSectionA = () => (
+  const renderClientDetails = () => (
     <div className="space-y-4">
       <div>
-        <h2 className="text-base font-semibold text-certvoice-text">Section A — Client Details</h2>
-        <p className="text-xs text-certvoice-muted mt-1">Person ordering the report</p>
+        <h2 className="text-base font-semibold text-certvoice-text">
+          {certType === 'MINOR_WORKS' ? 'Client Details' : 'Section A — Client Details'}
+        </h2>
+        <p className="text-xs text-certvoice-muted mt-1">
+          {certType === 'MINOR_WORKS'
+            ? 'Person the work is being carried out for'
+            : 'Person ordering the report'}
+        </p>
       </div>
 
       <div>
@@ -380,7 +519,7 @@ export default function NewInspection() {
   )
 
   // ============================================================
-  // RENDER: STEP 1 — Section B (Reason for Report)
+  // RENDER: EICR — Section B (Reason for Report)
   // ============================================================
 
   const renderSectionB = () => (
@@ -432,7 +571,7 @@ export default function NewInspection() {
   )
 
   // ============================================================
-  // RENDER: STEP 2 — Section C (Installation Details)
+  // RENDER: EICR — Section C (Installation Details)
   // ============================================================
 
   const renderSectionC = () => (
@@ -619,7 +758,7 @@ export default function NewInspection() {
   )
 
   // ============================================================
-  // RENDER: STEP 3 — Section D (Extent & Limitations)
+  // RENDER: EICR — Section D (Extent & Limitations)
   // ============================================================
 
   const renderSectionD = () => (
@@ -695,10 +834,54 @@ export default function NewInspection() {
   )
 
   // ============================================================
-  // RENDER: STEP 4 — Review
+  // RENDER: REVIEW (both flows)
   // ============================================================
 
   const renderReview = () => {
+    if (certType === 'MINOR_WORKS') {
+      return (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-base font-semibold text-certvoice-text">Review &amp; Create</h2>
+            <p className="text-xs text-certvoice-muted mt-1">
+              Check client details — you&apos;ll complete the rest on the certificate
+            </p>
+          </div>
+
+          <div className="cv-panel space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="cv-section-title !mb-0">Client Details</span>
+              <button
+                type="button"
+                onClick={() => setCurrentStep(0)}
+                className="text-xs text-certvoice-accent hover:underline"
+              >
+                Edit
+              </button>
+            </div>
+            <div className="grid grid-cols-1 gap-1">
+              <div className="cv-data-field">
+                <div className="cv-data-label">Client</div>
+                <div className="cv-data-value">{clientDetails.clientName || '—'}</div>
+              </div>
+              <div className="cv-data-field">
+                <div className="cv-data-label">Address</div>
+                <div className="cv-data-value text-xs">{clientDetails.clientAddress || '—'}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="cv-panel p-3 bg-certvoice-accent/5 border-certvoice-accent/20">
+            <p className="text-xs text-certvoice-accent">
+              <strong>Part P notification</strong> — Minor Works require building regulation notification
+              through your scheme provider. You can record this on the certificate.
+            </p>
+          </div>
+        </div>
+      )
+    }
+
+    // EICR review
     const purposeLabel =
       REPORT_PURPOSES.find((p) => p.value === reportReason.purpose)?.label ?? reportReason.purpose
     const premisesLabel =
@@ -714,17 +897,10 @@ export default function NewInspection() {
           </p>
         </div>
 
-        {/* Section A Summary */}
         <div className="cv-panel space-y-2">
           <div className="flex items-center justify-between">
             <span className="cv-section-title !mb-0">A: Client Details</span>
-            <button
-              type="button"
-              onClick={() => setCurrentStep(0)}
-              className="text-xs text-certvoice-accent hover:underline"
-            >
-              Edit
-            </button>
+            <button type="button" onClick={() => setCurrentStep(0)} className="text-xs text-certvoice-accent hover:underline">Edit</button>
           </div>
           <div className="grid grid-cols-1 gap-1">
             <div className="cv-data-field">
@@ -738,17 +914,10 @@ export default function NewInspection() {
           </div>
         </div>
 
-        {/* Section B Summary */}
         <div className="cv-panel space-y-2">
           <div className="flex items-center justify-between">
             <span className="cv-section-title !mb-0">B: Reason</span>
-            <button
-              type="button"
-              onClick={() => setCurrentStep(1)}
-              className="text-xs text-certvoice-accent hover:underline"
-            >
-              Edit
-            </button>
+            <button type="button" onClick={() => setCurrentStep(1)} className="text-xs text-certvoice-accent hover:underline">Edit</button>
           </div>
           <div className="grid grid-cols-2 gap-1">
             <div className="cv-data-field">
@@ -762,24 +931,15 @@ export default function NewInspection() {
           </div>
         </div>
 
-        {/* Section C Summary */}
         <div className="cv-panel space-y-2">
           <div className="flex items-center justify-between">
             <span className="cv-section-title !mb-0">C: Installation</span>
-            <button
-              type="button"
-              onClick={() => setCurrentStep(2)}
-              className="text-xs text-certvoice-accent hover:underline"
-            >
-              Edit
-            </button>
+            <button type="button" onClick={() => setCurrentStep(2)} className="text-xs text-certvoice-accent hover:underline">Edit</button>
           </div>
           <div className="grid grid-cols-2 gap-1">
             <div className="cv-data-field col-span-2">
               <div className="cv-data-label">Address</div>
-              <div className="cv-data-value text-xs">
-                {installationDetails.installationAddress || '—'}
-              </div>
+              <div className="cv-data-value text-xs">{installationDetails.installationAddress || '—'}</div>
             </div>
             <div className="cv-data-field">
               <div className="cv-data-label">Premises</div>
@@ -796,17 +956,10 @@ export default function NewInspection() {
           </div>
         </div>
 
-        {/* Section D Summary */}
         <div className="cv-panel space-y-2">
           <div className="flex items-center justify-between">
             <span className="cv-section-title !mb-0">D: Extent</span>
-            <button
-              type="button"
-              onClick={() => setCurrentStep(3)}
-              className="text-xs text-certvoice-accent hover:underline"
-            >
-              Edit
-            </button>
+            <button type="button" onClick={() => setCurrentStep(3)} className="text-xs text-certvoice-accent hover:underline">Edit</button>
           </div>
           <div className="cv-data-field">
             <div className="cv-data-label">Agreed With</div>
@@ -818,36 +971,62 @@ export default function NewInspection() {
   }
 
   // ============================================================
-  // RENDER: MAIN
+  // RENDER: STEP CONTENT
   // ============================================================
 
-  const stepRenderers = [renderSectionA, renderSectionB, renderSectionC, renderSectionD, renderReview]
-  const CurrentStepRenderer = stepRenderers[currentStep]
+  const renderStepContent = () => {
+    if (certType === 'MINOR_WORKS') {
+      switch (currentStep) {
+        case 0: return renderClientDetails()
+        case 1: return renderReview()
+        default: return null
+      }
+    }
+
+    // EICR flow
+    switch (currentStep) {
+      case 0: return renderClientDetails()
+      case 1: return renderSectionB()
+      case 2: return renderSectionC()
+      case 3: return renderSectionD()
+      case 4: return renderReview()
+      default: return null
+    }
+  }
+
+  const isLastStep = currentStep === steps.length - 1
+  const certLabel = certType === 'MINOR_WORKS' ? 'Minor Works' : 'EICR'
+  const startLabel = certType === 'MINOR_WORKS' ? 'Create Certificate' : 'Start Inspection'
+
+  // ============================================================
+  // RENDER: MAIN
+  // ============================================================
 
   return (
     <>
       <Helmet>
-        <title>New Inspection | CertVoice</title>
-        <meta name="description" content="Start a new EICR electrical inspection" />
+        <title>New {certLabel} | CertVoice</title>
+        <meta name="description" content={`Start a new ${certLabel} certificate`} />
       </Helmet>
 
       <div className="max-w-lg mx-auto px-4 py-6 space-y-6">
         {/* Header */}
         <div className="flex items-center gap-3">
-          <Link
-            to="/"
+          <button
+            type="button"
+            onClick={handleBack}
             className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
                        text-certvoice-muted hover:text-certvoice-text hover:border-certvoice-muted transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
-          </Link>
+          </button>
           <div>
             <h1 className="text-lg font-bold text-certvoice-text flex items-center gap-2">
               <Zap className="w-5 h-5 text-certvoice-accent" />
-              New EICR Inspection
+              New {certLabel}
             </h1>
             <p className="text-xs text-certvoice-muted">
-              Step {currentStep + 1} of {STEPS.length}
+              Step {currentStep + 1} of {steps.length}
             </p>
           </div>
         </div>
@@ -857,7 +1036,7 @@ export default function NewInspection() {
 
         {/* Step Content */}
         <div className="cv-panel">
-          {CurrentStepRenderer ? CurrentStepRenderer() : null}
+          {renderStepContent()}
         </div>
 
         {/* Navigation Buttons */}
@@ -873,7 +1052,7 @@ export default function NewInspection() {
             </button>
           )}
 
-          {currentStep < STEPS.length - 1 ? (
+          {!isLastStep ? (
             <button
               type="button"
               onClick={handleNext}
@@ -889,7 +1068,7 @@ export default function NewInspection() {
               className="cv-btn-primary flex-1 flex items-center justify-center gap-2"
             >
               <Zap className="w-4 h-4" />
-              Start Inspection
+              {startLabel}
             </button>
           )}
         </div>
