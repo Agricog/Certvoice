@@ -825,14 +825,14 @@ export async function generateEICRPdf(cert: EICRCertificate): Promise<Uint8Array
  * Caller is responsible for showing a download link and revoking the URL.
  */
 export async function generateEICRBlobUrl(cert: EICRCertificate): Promise<{ url: string; filename: string }> {
+  alert('BLOB-1: Entered generateEICRBlobUrl')
   const pdfBytes = await generateEICRPdf(cert)
-
+  alert('BLOB-2: Got PDF bytes')
   const buffer = new ArrayBuffer(pdfBytes.byteLength)
   new Uint8Array(buffer).set(pdfBytes)
-
   const blob = new Blob([buffer], { type: 'application/pdf' })
   const url = URL.createObjectURL(blob)
   const filename = `EICR-${cert.reportNumber || cert.id}.pdf`
-
+  alert('BLOB-3: URL created')
   return { url, filename }
 }
