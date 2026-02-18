@@ -132,7 +132,8 @@ export default function Home() {
       )
 
       if (data && !error) {
-        setCertificates(data)
+        const certs = Array.isArray(data) ? data : (data as { data?: Partial<EICRCertificate>[] }).data ?? []
+        setCertificates(certs)
       } else {
         // API not available yet — show empty state, no error displayed
         setCertificates([])
