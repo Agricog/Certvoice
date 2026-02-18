@@ -21,7 +21,6 @@ import {
   CheckCircle2,
   ChevronRight,
   Loader2,
-  AlertTriangle,
   Download,
   Send,
   RefreshCw,
@@ -190,9 +189,8 @@ export default function Certificates() {
       // Step 2: Try API (merge results, API is source of truth for completed certs)
       if (navigator.onLine) {
         try {
-          const apiCerts = await listCertificates(getToken)
-          const apiItems = (apiCerts as Partial<EICRCertificate>[]).map((c) => mapCertToListItem(c, false))
-
+          const { data: apiCerts } = await listCertificates(getToken)
+          const apiItems = apiCerts.map((c) => mapCertToListItem(c as unknown as Partial<EICRCertificate>, false))
           // Merge: API wins for matching IDs, keep local-only certs
           const apiIds = new Set(apiItems.map((c) => c.id))
           const localOnly = localItems.filter((c) => !apiIds.has(c.id))
