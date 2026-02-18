@@ -44,6 +44,8 @@ export interface ExtractionContext {
   existingCircuits: string[]
   /** Earthing type (for max Zs lookups) */
   earthingType: string | null
+  /** What type of extraction to perform */
+  extractionType?: 'circuit' | 'observation' | 'supply'
 }
 
 export interface UseAIExtractionReturn {
@@ -138,6 +140,7 @@ export function useAIExtraction(): UseAIExtractionReturn {
           dbContext: context.dbContext,
           existingCircuits: context.existingCircuits,
           earthingType: context.earthingType,
+          type: context.extractionType ?? 'circuit',
         }
 
         // Send to proxy
