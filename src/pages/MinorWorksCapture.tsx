@@ -17,7 +17,7 @@ import {
   UserCheck,
   Calendar,
 } from 'lucide-react';
-import SyncIndicator from '../components/SyncIndicator';
+// SyncIndicator requires full sync service wiring — use inline badge for now
 import { useApiToken } from '../hooks/useApiToken';
 import useEngineerProfile from '../hooks/useEngineerProfile';
 import { saveCertificate, getCertificate } from '../services/offlineStore';
@@ -383,7 +383,14 @@ export default function MinorWorksCapture() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <SyncIndicator status={syncStatus} />
+              <span className={`text-xs px-2 py-1 rounded-full border ${
+                syncStatus === 'saved' ? 'text-green-400 bg-green-400/10 border-green-400/30' :
+                syncStatus === 'syncing' ? 'text-amber-400 bg-amber-400/10 border-amber-400/30' :
+                syncStatus === 'offline' ? 'text-amber-400 bg-amber-400/10 border-amber-400/30' :
+                'text-red-400 bg-red-400/10 border-red-400/30'
+              }`}>
+                {syncStatus === 'saved' ? 'Saved' : syncStatus === 'syncing' ? 'Syncing...' : syncStatus === 'offline' ? 'Offline' : 'Error'}
+              </span>
               <button
                 onClick={() => setShowWarnings(!showWarnings)}
                 className={`p-2 rounded-lg ${
