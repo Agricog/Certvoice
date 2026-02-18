@@ -52,6 +52,7 @@ import InspectionChecklist from '../components/InspectionChecklist'
 import SyncIndicator from '../components/SyncIndicator'
 import DeclarationForm, { EMPTY_DECLARATION } from '../components/DeclarationForm'
 import TestInstrumentsForm, { EMPTY_INSTRUMENTS } from '../components/TestInstrumentsForm'
+import BoardEditor from '../components/BoardEditor'
 import useEngineerProfile from '../hooks/useEngineerProfile'
 import { captureError } from '../utils/errorTracking'
 import { trackCircuitCaptured, trackObservationCaptured, trackChecklistProgress } from '../utils/analytics'
@@ -142,6 +143,7 @@ export default function InspectionCapture() {
   const [showObservationRecorder, setShowObservationRecorder] = useState(false)
   const [editingCircuitIndex, setEditingCircuitIndex] = useState<number | null>(null)
   const [editingObsIndex, setEditingObsIndex] = useState<number | null>(null)
+  const [editingBoardIndex, setEditingBoardIndex] = useState<number | null>(null)
   const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set())
   const [isExporting, setIsExporting] = useState(false)
   const [pdfReady, setPdfReady] = useState<{ url: string; filename: string } | null>(null)
@@ -603,6 +605,39 @@ export default function InspectionCapture() {
     })
   }, [persistCertificate])
 
+  const handleBoardUpdate = useCallback((updated: DistributionBoardHeader) => {
+    setCertificate((prev) => {
+      const existing = [...(prev.distributionBoards ?? [])]
+      if (editingBoardIndex !== null && editingBoardIndex < existing.length) {
+        const oldRef = existing[editingBoardIndex].dbReference
+        existing[editingBoardIndex] = updated
+
+        // If dbReference changed, update all circuits and observations referencing the old ref
+        if (oldRef !== updated.dbReference) {
+          const updatedCircuits = (prev.circuits ?? []).map((c) =>
+            c.dbId === oldRef ? { ...c, dbId: updated.dbReference } : c
+          )
+          const updatedObs = (prev.observations ?? []).map((o) =>
+            o.dbReference === oldRef ? { ...o, dbReference: updated.dbReference } : o
+          )
+          const cert = {
+            ...prev,
+            distributionBoards: existing,
+            circuits: updatedCircuits,
+            observations: updatedObs,
+            updatedAt: new Date().toISOString(),
+          }
+          persistCertificate(cert)
+          return cert
+        }
+      }
+      const cert = { ...prev, distributionBoards: existing, updatedAt: new Date().toISOString() }
+      persistCertificate(cert)
+      return cert
+    })
+    setEditingBoardIndex(null)
+  }, [editingBoardIndex, persistCertificate])
+
   // ============================================================
   // HANDLERS: MANUAL SAVE
   // ============================================================
@@ -684,12 +719,28 @@ export default function InspectionCapture() {
         </button>
       </div>
 
-      {/* Board info */}
-      {activeBoard && (
-        <div className="text-xs text-certvoice-muted">
+      {/* Board info (tap to edit) */}
+      {activeBoard && editingBoardIndex === null && (
+        <button
+          type="button"
+          onClick={() => setEditingBoardIndex(activeDbIndex)}
+          className="w-full text-left text-xs text-certvoice-muted hover:text-certvoice-accent transition-colors"
+        >
           {activeBoard.dbLocation ? `Location: ${activeBoard.dbLocation}` : 'No location set'} ·{' '}
           {boardCircuits.length} circuit{boardCircuits.length !== 1 ? 's' : ''}
-        </div>
+          {activeBoard.zsAtDb != null ? ` · Zs: ${activeBoard.zsAtDb}Ω` : ''}
+          {activeBoard.ipfAtDb != null ? ` · Ipf: ${activeBoard.ipfAtDb}kA` : ''}
+          <span className="text-certvoice-accent/60 ml-1">Edit</span>
+        </button>
+      )}
+
+      {/* Board editor (inline) */}
+      {activeBoard && editingBoardIndex === activeDbIndex && (
+        <BoardEditor
+          board={activeBoard}
+          onSave={handleBoardUpdate}
+          onCancel={() => setEditingBoardIndex(null)}
+        />
       )}
 
       {/* Circuit list */}
