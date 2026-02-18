@@ -71,6 +71,7 @@ interface CircuitRecorderProps {
   dbContext: string
   existingCircuits: string[]
   earthingType: EarthingType | null
+  editingCircuit?: Partial<CircuitDetail> | null
   onCircuitConfirmed: (data: Partial<CircuitDetail>) => void
   onCancel: () => void
 }
@@ -157,6 +158,12 @@ function toNum(val: string): number | null {
   return isNaN(n) ? null : n
 }
 
+/** Convert a numeric value (or null) back to a form string */
+function numToStr(val: number | string | null | undefined): string {
+  if (val == null) return ''
+  return String(val)
+}
+
 function mapFormToCircuitDetail(f: CircuitFormData): Partial<CircuitDetail> {
   return {
     circuitNumber: f.circuit_number,
@@ -187,6 +194,41 @@ function mapFormToCircuitDetail(f: CircuitFormData): Partial<CircuitDetail> {
     rcdTestButton: f.rcd_test_button_ok,
     afddTestButton: f.afdd_fitted,
     remarks: f.comments,
+  }
+}
+
+/** Reverse map: CircuitDetail → form data for pre-populating edit mode */
+function mapCircuitDetailToForm(c: Partial<CircuitDetail>): CircuitFormData {
+  return {
+    circuit_number: c.circuitNumber ?? '',
+    description: c.circuitDescription ?? '',
+    type_of_wiring: c.wiringType ?? '',
+    reference_method: c.referenceMethod ?? '',
+    number_of_points: numToStr(c.numberOfPoints),
+    ocpd_bs_en: c.ocpdBsEn ?? '',
+    ocpd_type: c.ocpdType ?? '',
+    ocpd_rating: numToStr(c.ocpdRating),
+    ocpd_short_circuit_capacity: numToStr(c.breakingCapacity),
+    max_disconnection_time: numToStr(c.maxDisconnectTime),
+    live_csa: numToStr(c.liveConductorCsa),
+    cpc_csa: numToStr(c.cpcCsa),
+    max_zs: numToStr(c.maxPermittedZs),
+    measured_zs: numToStr(c.zs),
+    r1_plus_r2: numToStr(c.r1r2),
+    r2: numToStr(c.r2Standalone),
+    ring_r1: numToStr(c.r1),
+    ring_rn: numToStr(c.rn),
+    ring_r2: numToStr(c.r2),
+    insulation_live_live: numToStr(c.irLiveLive),
+    insulation_live_earth: numToStr(c.irLiveEarth),
+    polarity_confirmed: c.polarity ?? 'NA',
+    rcd_type: c.rcdType ?? '',
+    rcd_rated_current: numToStr(c.rcdRating),
+    rcd_operating_time: numToStr(c.rcdDisconnectionTime),
+    rcd_test_button_ok: c.rcdTestButton ?? 'NA',
+    afdd_fitted: c.afddTestButton ?? 'NA',
+    spd_fitted: false,
+    comments: c.remarks ?? '',
   }
 }
 
@@ -396,21 +438,27 @@ export default function CircuitRecorder({
   dbContext,
   existingCircuits: _existingCircuits,
   earthingType: _earthingType,
+  editingCircuit,
   onCircuitConfirmed,
   onCancel,
 }: CircuitRecorderProps) {
   const { getToken } = useAuth()
   const [step, setStep] = useState<RecorderStep>(mode === 'manual' ? 'review' : 'idle')
-  const [formData, setFormData] = useState<CircuitFormData>(() => ({
-    ...EMPTY_FORM,
-  }))
+  const [formData, setFormData] = useState<CircuitFormData>(() => {
+    if (editingCircuit) return mapCircuitDetailToForm(editingCircuit)
+    return { ...EMPTY_FORM }
+  })
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const maxZsManualRef = useRef(false) // tracks if user manually edited max_zs
+  const maxZsManualRef = useRef(!!editingCircuit?.maxPermittedZs) // don't auto-overwrite when editing
 
   // Voice transcript + AI confidence state
-  const [voiceTranscript, setVoiceTranscript] = useState<string | null>(null)
-  const [fieldConfidence, setFieldConfidence] = useState<Record<string, number> | null>(null)
+  const [voiceTranscript, setVoiceTranscript] = useState<string | null>(
+    editingCircuit?.voiceTranscript ?? null
+  )
+  const [fieldConfidence, setFieldConfidence] = useState<Record<string, number> | null>(
+    editingCircuit?.fieldConfidence ?? null
+  )
 
   // Voice recording state
   const [isRecording, setIsRecording] = useState(false)
@@ -615,6 +663,8 @@ export default function CircuitRecorder({
       const mapped = mapFormToCircuitDetail(sanitized)
       onCircuitConfirmed({
         ...mapped,
+        // Preserve the original id when editing so the parent merges rather than appends
+        ...(editingCircuit?.id ? { id: editingCircuit.id } : {}),
         voiceTranscript: voiceTranscript ?? undefined,
         fieldConfidence: fieldConfidence ?? undefined,
       })
@@ -634,7 +684,7 @@ export default function CircuitRecorder({
   // ── Auto-fill max Zs from BS 7671 lookup ──────────────────────────────────
 
   useEffect(() => {
-    // Don't overwrite if user manually edited the field
+    // Don't overwrite if user manually edited the field or editing existing circuit
     if (maxZsManualRef.current) return
 
     const rating = parseFloat(formData.ocpd_rating)
@@ -744,7 +794,7 @@ export default function CircuitRecorder({
           Cancel
         </button>
         <h2 className="text-white text-sm font-semibold">
-          {mode === 'manual' ? 'Manual Entry' : 'Review Circuit'}
+          {editingCircuit ? 'Edit Circuit' : mode === 'manual' ? 'Manual Entry' : 'Review Circuit'}
         </h2>
         <button
           type="button"
