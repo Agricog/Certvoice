@@ -855,6 +855,7 @@ export default function InspectionCapture() {
           dbContext={activeBoard?.dbReference ?? 'DB1'}
           existingCircuits={boardCircuits.map((c) => c.circuitNumber ?? '')}
           earthingType={earthingType}
+          editingCircuit={editingCircuitIndex !== null && circuits[editingCircuitIndex] ? circuits[editingCircuitIndex] : null}
           onCircuitConfirmed={handleCircuitConfirmed}
           onCancel={() => {
             setRecorderMode(null)
