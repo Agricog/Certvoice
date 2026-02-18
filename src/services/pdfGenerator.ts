@@ -779,22 +779,19 @@ function drawCircuitPages(
  * Returns raw bytes — use downloadEICRPdf() for browser download.
  */
 export async function generateEICRPdf(cert: EICRCertificate): Promise<Uint8Array> {
+  alert('PDF-A: Creating document')
   const pdfDoc = await PDFDocument.create()
-
   const regular = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
   const fonts: FontSet = { regular, bold }
-
   pdfDoc.setTitle(`EICR Report ${cert.reportNumber}`)
   pdfDoc.setAuthor(cert.declaration.inspectorName || 'CertVoice')
   pdfDoc.setSubject('Electrical Installation Condition Report')
   pdfDoc.setCreator('CertVoice — certvoice.co.uk')
   pdfDoc.setCreationDate(new Date())
-
-  // Page 1: Sections A-D
+  alert('PDF-B: Drawing page 1')
   drawClientInstallationPage(pdfDoc, cert, fonts)
-
-  // Fetch signatures (graceful fallback if offline)
+  alert('PDF-C: Fetching signatures')
   const [inspSig, qsSig] = await Promise.all([
     cert.declaration.inspectorSignatureKey
       ? fetchSignaturePng(cert.declaration.inspectorSignatureKey)
@@ -803,23 +800,22 @@ export async function generateEICRPdf(cert: EICRCertificate): Promise<Uint8Array
       ? fetchSignaturePng(cert.declaration.qsSignatureKey)
       : Promise.resolve(null),
   ])
-
-  // Page 2: Sections E-G (declaration + signatures)
+  alert('PDF-D: Drawing declaration page')
   await drawDeclarationPage(pdfDoc, cert, fonts, { inspector: inspSig, qs: qsSig })
-
-  // Page 3: Sections I-J
+  alert('PDF-E: Drawing supply page')
   drawSupplyPage(pdfDoc, cert, fonts)
-
-  // Dynamic pages
+  alert('PDF-F: Drawing observations')
   let nextPage = 4
   nextPage = drawObservationsPages(pdfDoc, cert, fonts, nextPage)
+  alert('PDF-G: Drawing inspections')
   nextPage = drawInspectionPages(pdfDoc, cert, fonts, nextPage)
+  alert('PDF-H: Drawing circuits')
   drawCircuitPages(pdfDoc, cert, fonts, nextPage)
-
+  alert('PDF-I: Saving PDF')
   const pdfBytes = await pdfDoc.save()
+  alert('PDF-J: Done - ' + pdfBytes.byteLength + ' bytes')
   return pdfBytes
 }
-
 // ============================================================
 // BROWSER DOWNLOAD
 // ============================================================
