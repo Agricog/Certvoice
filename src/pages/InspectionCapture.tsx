@@ -63,6 +63,7 @@ import { getCertificate as getFromApi, createCertificate } from '../services/cer
 import { createSyncService } from '../services/syncService'
 import { generateEICRBlobUrl } from '../services/pdfGenerator'
 import { createDefaultSchedule } from '../data/bs7671Schedule'
+
 // ============================================================
 // TYPES
 // ============================================================
@@ -193,27 +194,6 @@ export default function InspectionCapture() {
       }
     }
   }, [pdfReady, certificate.reportNumber, certificate.installationDetails?.installationAddress])
-
-  // --- Validation warnings ---
-  const validationWarnings = useMemo(() => {
-    const w: string[] = []
-    if (!circuits.length) w.push('No circuits recorded')
-    if (!supply.earthingType) w.push('Earthing type not set')
-    if (supply.ze === null || supply.ze === undefined) w.push('Ze not measured')
-    if (supply.ipf === null || supply.ipf === undefined) w.push('Ipf not measured')
-    if (!supply.supplyPolarityConfirmed) w.push('Supply polarity not confirmed')
-    const scheduleComplete = inspectionItems.filter((i) => i.outcome !== null).length
-    if (inspectionItems.length > 0 && scheduleComplete === 0) w.push('No inspection items completed')
-    else if (inspectionItems.length > 0 && scheduleComplete < inspectionItems.length) {
-      w.push(`Inspection schedule ${scheduleComplete}/${inspectionItems.length} complete`)
-    }
-    const decl = certificate.declaration
-    if (!decl?.inspectorName) w.push('Inspector name not set')
-    if (!decl?.dateInspected) w.push('Inspection date not set')
-    return w
-  }, [circuits.length, supply, inspectionItems, certificate.declaration])
-
-  // --- Transcript toggle (view without entering edit mode) ---
 
   // --- Transcript toggle (view without entering edit mode) ---
   const toggleTranscript = useCallback((id: string) => {
@@ -400,7 +380,10 @@ export default function InspectionCapture() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // --- Derived state ---
+  // ============================================================
+  // DERIVED STATE
+  // ============================================================
+
   const boards = certificate.distributionBoards ?? []
   const activeBoard = boards[activeDbIndex]
   const circuits = certificate.circuits ?? []
@@ -449,6 +432,7 @@ export default function InspectionCapture() {
       })
     }
   }, [hasUnsatisfactory, observations.length, certificate.summaryOfCondition?.overallAssessment, persistCertificate])
+
   // Auto-populate BS 7671 inspection schedule if empty
   useEffect(() => {
     if (pageState === 'ready' && certificate.id && (!certificate.inspectionSchedule || certificate.inspectionSchedule.length === 0)) {
@@ -462,6 +446,25 @@ export default function InspectionCapture() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageState, certificate.id])
+
+  // --- Validation warnings (must be after derived state) ---
+  const validationWarnings = useMemo(() => {
+    const w: string[] = []
+    if (!circuits.length) w.push('No circuits recorded')
+    if (!supply.earthingType) w.push('Earthing type not set')
+    if (supply.ze === null || supply.ze === undefined) w.push('Ze not measured')
+    if (supply.ipf === null || supply.ipf === undefined) w.push('Ipf not measured')
+    if (!supply.supplyPolarityConfirmed) w.push('Supply polarity not confirmed')
+    const scheduleComplete = inspectionItems.filter((i) => i.outcome !== null).length
+    if (inspectionItems.length > 0 && scheduleComplete === 0) w.push('No inspection items completed')
+    else if (inspectionItems.length > 0 && scheduleComplete < inspectionItems.length) {
+      w.push(`Inspection schedule ${scheduleComplete}/${inspectionItems.length} complete`)
+    }
+    const decl = certificate.declaration
+    if (!decl?.inspectorName) w.push('Inspector name not set')
+    if (!decl?.dateInspected) w.push('Inspection date not set')
+    return w
+  }, [circuits.length, supply, inspectionItems, certificate.declaration])
 
   // ============================================================
   // HANDLERS: CIRCUITS
@@ -1198,30 +1201,32 @@ export default function InspectionCapture() {
               onSyncNow={() => syncServiceRef.current?.syncNow()}
             />
           )}
-          {pdfReady ? (<>
-            <a
-              href={pdfReady.url}
-              download={pdfReady.filename}
-              onClick={() => setTimeout(() => {
-                URL.revokeObjectURL(pdfReady.url)
-                setPdfReady(null)
-              }, 5000)}
-              className="w-8 h-8 rounded-lg border border-certvoice-green flex items-center justify-center
-                         text-certvoice-green hover:bg-certvoice-green/10 transition-colors animate-pulse"
-              title="Download PDF"
-            >
-              <Download className="w-4 h-4" />
-            </a>
-            <button
-              type="button"
-              onClick={handleSharePdf}
-              className="w-8 h-8 rounded-lg border border-certvoice-accent flex items-center justify-center
-                         text-certvoice-accent hover:bg-certvoice-accent/10 transition-colors"
-              title="Share PDF"
-            >
-              <Share2 className="w-4 h-4" />
-            </button>
-            </>) : (
+          {pdfReady ? (
+            <>
+              <a
+                href={pdfReady.url}
+                download={pdfReady.filename}
+                onClick={() => setTimeout(() => {
+                  URL.revokeObjectURL(pdfReady.url)
+                  setPdfReady(null)
+                }, 5000)}
+                className="w-8 h-8 rounded-lg border border-certvoice-green flex items-center justify-center
+                           text-certvoice-green hover:bg-certvoice-green/10 transition-colors animate-pulse"
+                title="Download PDF"
+              >
+                <Download className="w-4 h-4" />
+              </a>
+              <button
+                type="button"
+                onClick={handleSharePdf}
+                className="w-8 h-8 rounded-lg border border-certvoice-accent flex items-center justify-center
+                           text-certvoice-accent hover:bg-certvoice-accent/10 transition-colors"
+                title="Share PDF"
+              >
+                <Share2 className="w-4 h-4" />
+              </button>
+            </>
+          ) : (
             <button
               type="button"
               onClick={handleExportPdf}
