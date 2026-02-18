@@ -15,6 +15,7 @@
 // ============================================================
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
+const R2_BASE_URL = import.meta.env.VITE_R2_BASE_URL ?? BASE_URL
 
 // ============================================================
 // TYPES
