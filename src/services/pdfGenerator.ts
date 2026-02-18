@@ -59,7 +59,7 @@ async function fetchSignaturePng(key: string): Promise<Uint8Array | null> {
     const token = clerk?.session ? await clerk.session.getToken() : null
     if (!token) return null
 
-    const res = await fetch(`${BASE_URL}/api/download-url`, {
+    const res = await fetch(`${R2_BASE_URL}/api/download-url`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
