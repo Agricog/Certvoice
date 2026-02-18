@@ -965,7 +965,7 @@ export default function InspectionCapture() {
         {/* ---- Header ---- */}
         <div className="flex items-center gap-3">
           <Link
-            to="/"
+            to="/dashboard"
             className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
                        text-certvoice-muted hover:text-certvoice-text hover:border-certvoice-muted transition-colors"
           >
