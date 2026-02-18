@@ -4,13 +4,13 @@
  * List of all EICR certificates with search, status filtering,
  * and quick access to continue drafts or view completed PDFs.
  *
- * Calls GET /api/certificates (wired in worker deployment phase).
- * Until then, displays empty state gracefully.
+ * Offline-first: loads from IndexedDB immediately, then merges
+ * API results when online. Shows overall assessment badge.
  *
  * @module pages/Certificates
  */
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { Helmet } from 'react-helmet-async'
 import {
@@ -24,6 +24,8 @@ import {
   AlertTriangle,
   Download,
   Send,
+  RefreshCw,
+  WifiOff,
 } from 'lucide-react'
 import type {
   EICRCertificate,
@@ -31,13 +33,16 @@ import type {
   ClassificationCode,
 } from '../types/eicr'
 import { captureError } from '../utils/errorTracking'
-import { api } from '../services/api'
+import { listLocalCertificates } from '../services/offlineStore'
+import { listCertificates } from '../services/certificateApi'
+import { useApiToken } from '../hooks/useApiToken'
 
 // ============================================================
 // TYPES
 // ============================================================
 
 type StatusFilter = 'ALL' | CertificateStatus
+type OverallAssessment = 'SATISFACTORY' | 'UNSATISFACTORY' | null
 
 interface CertificateListItem {
   id: string
@@ -48,15 +53,11 @@ interface CertificateListItem {
   inspectionDate: string | null
   circuitCount: number
   observationCounts: Record<ClassificationCode, number>
+  overallAssessment: OverallAssessment
   hasPdf: boolean
   updatedAt: string
+  isLocal: boolean
 }
-
-// ============================================================
-// CONSTANTS
-// ============================================================
-
-const API_URL = '/api/certificates'
 
 // ============================================================
 // HELPERS
@@ -107,8 +108,9 @@ function formatTimeAgo(iso: string): string {
   }
 }
 
-function mapCertToListItem(cert: Partial<EICRCertificate>): CertificateListItem {
+function mapCertToListItem(cert: Partial<EICRCertificate>, isLocal = false): CertificateListItem {
   const observations = cert.observations ?? []
+  const assessment = cert.summaryOfCondition?.overallAssessment ?? null
   return {
     id: cert.id ?? '',
     reportNumber: cert.reportNumber ?? '',
@@ -123,8 +125,10 @@ function mapCertToListItem(cert: Partial<EICRCertificate>): CertificateListItem 
       C3: observations.filter((o) => o.classificationCode === 'C3').length,
       FI: observations.filter((o) => o.classificationCode === 'FI').length,
     },
+    overallAssessment: assessment as OverallAssessment,
     hasPdf: false,
     updatedAt: cert.updatedAt ?? '',
+    isLocal,
   }
 }
 
@@ -132,9 +136,6 @@ function getCertLink(cert: CertificateListItem): string {
   switch (cert.status) {
     case 'DRAFT':
       return '/new'
-    case 'COMPLETE':
-    case 'ISSUED':
-      return `/inspect/${cert.id}`
     default:
       return `/inspect/${cert.id}`
   }
@@ -145,38 +146,76 @@ function getCertLink(cert: CertificateListItem): string {
 // ============================================================
 
 export default function Certificates() {
+  const { getToken } = useApiToken()
   const [certificates, setCertificates] = useState<CertificateListItem[]>([])
   const [loading, setLoading] = useState<boolean>(true)
-  const [error, setError] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [isOffline, setIsOffline] = useState(!navigator.onLine)
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL')
 
-  // ---- Load certificates ----
+  // ---- Connectivity listener ----
   useEffect(() => {
-    loadCertificates()
+    const handleOnline = () => setIsOffline(false)
+    const handleOffline = () => setIsOffline(true)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
   }, [])
 
-const loadCertificates = async () => {
-    setLoading(true)
-    setError(null)
+  // ---- Load certificates (offline-first) ----
+  const loadCertificates = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true)
+    else setLoading(true)
 
     try {
-      const { data, error: apiError } = await api.get<Partial<EICRCertificate>[]>(API_URL)
+      // Step 1: Load from IndexedDB immediately (instant, no network)
+      let localItems: CertificateListItem[] = []
+      try {
+        const localCerts = await listLocalCertificates()
+        localItems = localCerts.map((stored) => mapCertToListItem(stored.data, true))
+      } catch (err) {
+        captureError(err, 'Certificates.loadLocal')
+      }
 
-      if (data && !apiError) {
-        setCertificates(data.map(mapCertToListItem))
-      } else {
-        // API not available or auth issue — show empty state
-        setCertificates([])
+      // Show local data immediately
+      if (localItems.length > 0) {
+        setCertificates(localItems)
+        setLoading(false)
+      }
+
+      // Step 2: Try API (merge results, API is source of truth for completed certs)
+      if (navigator.onLine) {
+        try {
+          const apiCerts = await listCertificates(getToken)
+          const apiItems = (apiCerts as Partial<EICRCertificate>[]).map((c) => mapCertToListItem(c, false))
+
+          // Merge: API wins for matching IDs, keep local-only certs
+          const apiIds = new Set(apiItems.map((c) => c.id))
+          const localOnly = localItems.filter((c) => !apiIds.has(c.id))
+          const merged = [...apiItems, ...localOnly]
+
+          setCertificates(merged)
+        } catch (err) {
+          // API failed — local data already shown, just log
+          captureError(err, 'Certificates.loadApi')
+        }
       }
     } catch (err) {
       captureError(err, 'Certificates.loadCertificates')
       setCertificates([])
-      setError(null)
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
-  }
+  }, [getToken])
+
+  useEffect(() => {
+    loadCertificates()
+  }, [loadCertificates])
 
   // ---- Filtered + sorted list ----
   const filteredCerts = useMemo(() => {
@@ -250,6 +289,23 @@ const loadCertificates = async () => {
             <h1 className="flex-1 text-sm font-bold text-certvoice-text">
               Certificates
             </h1>
+            {isOffline && (
+              <span className="flex items-center gap-1 text-[10px] text-certvoice-amber font-semibold">
+                <WifiOff className="w-3 h-3" />
+                Offline
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => loadCertificates(true)}
+              disabled={refreshing}
+              className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
+                         text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors
+                         disabled:opacity-50"
+              title="Refresh"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            </button>
             <Link
               to="/new"
               className="cv-btn-primary px-3 py-1.5 text-xs flex items-center gap-1.5"
@@ -261,14 +317,6 @@ const loadCertificates = async () => {
         </div>
 
         <div className="max-w-lg mx-auto px-4 py-6 space-y-4">
-          {/* Error */}
-          {error && (
-            <div className="flex items-center gap-2 bg-certvoice-red/10 border border-certvoice-red/30 rounded-lg px-3 py-2">
-              <AlertTriangle className="w-4 h-4 text-certvoice-red shrink-0" />
-              <p className="text-xs text-certvoice-red">{error}</p>
-            </div>
-          )}
-
           {/* Loading */}
           {loading ? (
             <div className="flex items-center justify-center py-20">
@@ -378,10 +426,23 @@ const loadCertificates = async () => {
                               {cert.clientName} · {cert.reportNumber}
                             </div>
                           </div>
-                          <span className={`${config.badgeClass} shrink-0 ml-2`}>
-                            <StatusIcon className="w-3 h-3 inline mr-1" />
-                            {config.label}
-                          </span>
+                          <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                            {cert.overallAssessment && (
+                              <span
+                                className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                  cert.overallAssessment === 'SATISFACTORY'
+                                    ? 'cv-badge-pass'
+                                    : 'cv-badge-fail'
+                                }`}
+                              >
+                                {cert.overallAssessment === 'SATISFACTORY' ? 'SAT' : 'UNSAT'}
+                              </span>
+                            )}
+                            <span className={`${config.badgeClass} shrink-0`}>
+                              <StatusIcon className="w-3 h-3 inline mr-1" />
+                              {config.label}
+                            </span>
+                          </div>
                         </div>
 
                         {/* Stats row */}
@@ -417,6 +478,7 @@ const loadCertificates = async () => {
                         <div className="flex items-center justify-between mt-2">
                           <span className="text-[10px] text-certvoice-muted/60">
                             Inspected: {cert.inspectionDate ? formatDate(cert.inspectionDate) : '—'}
+                            {cert.isLocal && ' · Local only'}
                           </span>
                           <ChevronRight className="w-3 h-3 text-certvoice-muted/40" />
                         </div>
