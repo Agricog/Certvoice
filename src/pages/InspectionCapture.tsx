@@ -609,7 +609,9 @@ export default function InspectionCapture() {
     setCertificate((prev) => {
       const existing = [...(prev.distributionBoards ?? [])]
       if (editingBoardIndex !== null && editingBoardIndex < existing.length) {
-        const oldRef = existing[editingBoardIndex].dbReference
+        const board = existing[editingBoardIndex]
+        if (!board) return prev
+        const oldRef = board.dbReference
         existing[editingBoardIndex] = updated
 
         // If dbReference changed, update all circuits and observations referencing the old ref
