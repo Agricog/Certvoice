@@ -151,11 +151,13 @@ export default function InspectionCapture() {
       setPdfReady(null)
     }
     setIsExporting(true)
+    alert('STEP 1: Starting PDF generation')
     try {
       const result = await generateEICRBlobUrl(certificate as EICRCertificate)
+      alert('STEP 2: PDF generated - ' + result.filename)
       setPdfReady(result)
     } catch (err) {
-      console.error('PDF EXPORT ERROR:', err)
+      alert('STEP 3: ERROR - ' + (err instanceof Error ? err.message : String(err)))
       captureError(err, 'InspectionCapture.handleExportPdf')
     } finally {
       setIsExporting(false)
