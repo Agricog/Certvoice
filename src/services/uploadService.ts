@@ -14,8 +14,7 @@
 // CONFIG
 // ============================================================
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
-const R2_BASE_URL = import.meta.env.VITE_R2_BASE_URL ?? BASE_URL
+const R2_BASE_URL = import.meta.env.VITE_R2_BASE_URL ?? import.meta.env.VITE_API_BASE_URL ?? ''
 
 // ============================================================
 // TYPES
@@ -84,7 +83,7 @@ export async function uploadFile(
   const contentType = file.type || (fileType === 'signature' ? 'image/png' : 'image/jpeg')
 
   // Step 1: Get upload key
-  const urlRes = await fetch(`${BASE_URL}/api/upload-url`, {
+  const urlRes = await fetch(`${R2_BASE_URL}/api/upload-url`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -106,7 +105,7 @@ export async function uploadFile(
   const urlData = (await urlRes.json()) as UploadUrlResponse
 
   // Step 2: PUT binary to upload endpoint
-  const uploadRes = await fetch(`${BASE_URL}${urlData.uploadEndpoint}`, {
+  const uploadRes = await fetch(`${R2_BASE_URL}${urlData.uploadEndpoint}`, {
     method: 'PUT',
     headers: {
       'Content-Type': contentType,
@@ -144,7 +143,7 @@ export async function getFileUrl(key: string): Promise<string> {
   const token = await getAuthToken()
   if (!token) throw new Error('Not authenticated')
 
-  const res = await fetch(`${BASE_URL}/api/download-url`, {
+  const res = await fetch(`${R2_BASE_URL}/api/download-url`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -174,7 +173,7 @@ export async function deleteFile(key: string): Promise<void> {
   const token = await getAuthToken()
   if (!token) throw new Error('Not authenticated')
 
-  const res = await fetch(`${BASE_URL}/api/file`, {
+  const res = await fetch(`${R2_BASE_URL}/api/file`, {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
