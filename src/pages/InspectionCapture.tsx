@@ -31,6 +31,7 @@ import {
   Pencil,
   FileSignature,
   Download,
+  Trash2,
 } from 'lucide-react'
 import type {
   EICRCertificate,
@@ -452,6 +453,16 @@ export default function InspectionCapture() {
     [editingCircuitIndex, activeBoard, persistCertificate, recorderMode]
   )
 
+  const handleDeleteCircuit = useCallback((globalIdx: number) => {
+    setCertificate((prev) => {
+      const existing = [...(prev.circuits ?? [])]
+      existing.splice(globalIdx, 1)
+      const cert = { ...prev, circuits: existing, updatedAt: new Date().toISOString() }
+      persistCertificate(cert)
+      return cert
+    })
+  }, [persistCertificate])
+
   // ============================================================
   // HANDLERS: OBSERVATIONS
   // ============================================================
@@ -496,6 +507,18 @@ export default function InspectionCapture() {
     },
     [editingObsIndex, activeBoard, persistCertificate]
   )
+
+  const handleDeleteObservation = useCallback((idx: number) => {
+    setCertificate((prev) => {
+      const existing = [...(prev.observations ?? [])]
+      existing.splice(idx, 1)
+      // Re-number remaining observations
+      const renumbered = existing.map((o, i) => ({ ...o, itemNumber: i + 1 }))
+      const cert = { ...prev, observations: renumbered, updatedAt: new Date().toISOString() }
+      persistCertificate(cert)
+      return cert
+    })
+  }, [persistCertificate])
 
   // ============================================================
   // HANDLERS: SUPPLY
@@ -786,6 +809,17 @@ export default function InspectionCapture() {
                   >
                     {circuit.status ?? 'INCOMPLETE'}
                   </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (confirm(`Delete circuit ${circuit.circuitNumber}?`)) handleDeleteCircuit(globalIdx)
+                    }}
+                    className="w-6 h-6 rounded flex items-center justify-center text-certvoice-muted hover:text-certvoice-red transition-colors ml-1"
+                    title="Delete circuit"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
                 {circuit.zs !== null && circuit.zs !== undefined && (
                   <div className="text-[10px] text-certvoice-muted mt-1">
@@ -928,6 +962,17 @@ export default function InspectionCapture() {
                     <div className="text-[10px] text-certvoice-muted mt-1 font-mono">{obs.regulationReference}</div>
                   )}
                 </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (confirm(`Delete observation ${obs.classificationCode} #${obs.itemNumber}?`)) handleDeleteObservation(idx)
+                  }}
+                  className="w-6 h-6 rounded flex items-center justify-center text-certvoice-muted hover:text-certvoice-red transition-colors shrink-0"
+                  title="Delete observation"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
               </div>
             </button>
             {obs.voiceTranscript && (
