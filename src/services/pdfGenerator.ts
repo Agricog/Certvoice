@@ -16,6 +16,10 @@
  *   Fetches PNG images from R2 via worker. Falls back to
  *   "[Signature on file]" if offline or fetch fails.
  *
+ * NOTE: pdf-lib StandardFonts (Helvetica) only support WinAnsi encoding.
+ * All text must use ASCII / Latin-1 characters only. No Greek letters,
+ * no tick/cross marks, no superscripts.
+ *
  * @module services/pdfGenerator
  */
 
@@ -100,7 +104,7 @@ interface SignatureImages {
 
 /** Safely convert any value to a display string */
 function s(val: unknown): string {
-  if (val == null || val === '') return '—'
+  if (val == null || val === '') return '--'
   return String(val)
 }
 
@@ -149,7 +153,7 @@ function drawHeader(
     color: COLOURS.muted,
   })
 
-  const reportText = `Report: ${reportNumber || '—'}`
+  const reportText = `Report: ${reportNumber || '--'}`
   const rw = fonts.bold.widthOfTextAtSize(reportText, FONT.reportNumber)
   page.drawText(reportText, {
     x: PAGE.width - PAGE.marginRight - rw - 10,
@@ -190,13 +194,13 @@ function drawClientInstallationPage(
   const extent = cert.extentAndLimitations ?? {}
 
   // --- Section A: Client Details ---
-  y = drawSectionHeader(page, fonts.bold, y, 'Section A — Details of the Client')
+  y = drawSectionHeader(page, fonts.bold, y, 'Section A - Details of the Client')
   y = drawField(page, fonts.regular, fonts.bold, y, 'Client Name', s(client.clientName))
   y = drawWrappedField(page, fonts.regular, fonts.bold, y, 'Client Address', s(client.clientAddress))
   y -= SPACING.sectionGap
 
   // --- Section B: Purpose of Report ---
-  y = drawSectionHeader(page, fonts.bold, y, 'Section B — Purpose of the Report')
+  y = drawSectionHeader(page, fonts.bold, y, 'Section B - Purpose of the Report')
 
   const purposeMap: Record<string, string> = {
     PERIODIC: 'Periodic inspection',
@@ -213,11 +217,11 @@ function drawClientInstallationPage(
       try { return new Date(d).toLocaleDateString('en-GB') } catch { return d }
     })
     .join(', ')
-  y = drawField(page, fonts.regular, fonts.bold, y, 'Date(s) of Inspection', dates || '—')
+  y = drawField(page, fonts.regular, fonts.bold, y, 'Date(s) of Inspection', dates || '--')
   y -= SPACING.sectionGap
 
   // --- Section C: Installation Details ---
-  y = drawSectionHeader(page, fonts.bold, y, 'Section C — Details of the Installation')
+  y = drawSectionHeader(page, fonts.bold, y, 'Section C - Details of the Installation')
   y = drawWrappedField(page, fonts.regular, fonts.bold, y, 'Installation Address', s(install.installationAddress))
   y = drawField(page, fonts.regular, fonts.bold, y, 'Occupier', s(install.occupier))
 
@@ -225,10 +229,10 @@ function drawClientInstallationPage(
     DOMESTIC: 'Domestic', COMMERCIAL: 'Commercial', INDUSTRIAL: 'Industrial',
     OTHER: install.otherDescription ?? 'Other',
   }
-  y = drawField(page, fonts.regular, fonts.bold, y, 'Type of Premises', premisesMap[install.premisesType] ?? '—')
+  y = drawField(page, fonts.regular, fonts.bold, y, 'Type of Premises', premisesMap[install.premisesType] ?? '--')
 
   y = drawFieldPair(page, fonts.regular, fonts.bold, y,
-    { label: 'Est. Age of Wiring', value: install.estimatedAgeOfWiring != null ? `${install.estimatedAgeOfWiring} years` : '—' },
+    { label: 'Est. Age of Wiring', value: install.estimatedAgeOfWiring != null ? `${install.estimatedAgeOfWiring} years` : '--' },
     { label: 'Additions/Alterations', value: install.evidenceOfAdditions ? 'Yes' : 'No' },
   )
 
@@ -243,7 +247,7 @@ function drawClientInstallationPage(
   y -= SPACING.sectionGap
 
   // --- Section D: Extent and Limitations ---
-  y = drawSectionHeader(page, fonts.bold, y, 'Section D — Extent and Limitations')
+  y = drawSectionHeader(page, fonts.bold, y, 'Section D - Extent and Limitations')
   y = drawWrappedField(page, fonts.regular, fonts.bold, y, 'Extent Covered', s(extent.extentCovered))
   y = drawWrappedField(page, fonts.regular, fonts.bold, y, 'Agreed Limitations', s(extent.agreedLimitations))
   y = drawField(page, fonts.regular, fonts.bold, y, 'Agreed With', s(extent.agreedWith))
@@ -271,25 +275,25 @@ async function drawDeclarationPage(
   const decl = cert.declaration ?? {}
 
   // --- Section E: Summary of Condition ---
-  y = drawSectionHeader(page, fonts.bold, y, 'Section E — Summary of the Condition of the Installation')
+  y = drawSectionHeader(page, fonts.bold, y, 'Section E - Summary of the Condition of the Installation')
   y = drawWrappedField(page, fonts.regular, fonts.bold, y, 'General Condition', s(summary.generalCondition))
 
   const assessment = summary.overallAssessment ?? ''
   const assessColour = assessment === 'SATISFACTORY' ? COLOURS.pass : COLOURS.fail
-  y = drawField(page, fonts.regular, fonts.bold, y, 'Overall Assessment', assessment || '—', { valueColour: assessColour })
+  y = drawField(page, fonts.regular, fonts.bold, y, 'Overall Assessment', assessment || '--', { valueColour: assessColour })
   y -= SPACING.sectionGap
 
   // --- Section F: Recommendations ---
-  y = drawSectionHeader(page, fonts.bold, y, 'Section F — Recommendations')
+  y = drawSectionHeader(page, fonts.bold, y, 'Section F - Recommendations')
 
   const nextDate = recs.nextInspectionDate
-  y = drawField(page, fonts.regular, fonts.bold, y, 'Next Inspection Date', nextDate ? new Date(nextDate).toLocaleDateString('en-GB') : '—')
+  y = drawField(page, fonts.regular, fonts.bold, y, 'Next Inspection Date', nextDate ? new Date(nextDate).toLocaleDateString('en-GB') : '--')
   y = drawField(page, fonts.regular, fonts.bold, y, 'Reason for Interval', s(recs.reasonForInterval))
   y = drawField(page, fonts.regular, fonts.bold, y, 'Remedial Urgency', s(recs.remedialUrgency))
   y -= SPACING.sectionGap
 
   // --- Section G: Declaration ---
-  y = drawSectionHeader(page, fonts.bold, y, 'Section G — Declaration')
+  y = drawSectionHeader(page, fonts.bold, y, 'Section G - Declaration')
 
   const declText = 'I/We, being the person(s) responsible for the inspection and testing of the electrical installation, particulars of which are described in this report, having exercised reasonable skill and care when carrying out the inspection and testing, hereby declare that the information in this report, including the observations and the attached schedules, provides an accurate assessment of the condition of the electrical installation.'
   const declLines = wrapText(declText, fonts.regular, FONT.label, CONTENT_WIDTH)
@@ -319,7 +323,7 @@ async function drawDeclarationPage(
   y = drawWrappedField(page, fonts.regular, fonts.bold, y, 'Company Address', s(decl.companyAddress))
 
   const inspDate = decl.dateInspected
-  y = drawField(page, fonts.regular, fonts.bold, y, 'Date Inspected', inspDate ? new Date(inspDate).toLocaleDateString('en-GB') : '—')
+  y = drawField(page, fonts.regular, fonts.bold, y, 'Date Inspected', inspDate ? new Date(inspDate).toLocaleDateString('en-GB') : '--')
 
   // Inspector signature
   if (sigImages.inspector) {
@@ -345,7 +349,7 @@ async function drawDeclarationPage(
   y = drawField(page, fonts.regular, fonts.bold, y, 'QS Name', s(decl.qsName))
 
   const qsDate = decl.qsDate
-  y = drawField(page, fonts.regular, fonts.bold, y, 'Date Authorised', qsDate ? new Date(qsDate).toLocaleDateString('en-GB') : '—')
+  y = drawField(page, fonts.regular, fonts.bold, y, 'Date Authorised', qsDate ? new Date(qsDate).toLocaleDateString('en-GB') : '--')
 
   // QS signature
   if (sigImages.qs) {
@@ -382,14 +386,14 @@ function drawSupplyPage(
   const install = cert.installationParticulars ?? {}
 
   // --- Section I: Supply Characteristics ---
-  y = drawSectionHeader(page, fonts.bold, y, 'Section I — Supply Characteristics and Earthing Arrangements')
+  y = drawSectionHeader(page, fonts.bold, y, 'Section I - Supply Characteristics and Earthing Arrangements')
 
   const earthingMap: Record<string, string> = {
     TN_C: 'TN-C', TN_S: 'TN-S', TN_C_S: 'TN-C-S', TT: 'TT', IT: 'IT',
   }
 
   y = drawFieldPair(page, fonts.regular, fonts.bold, y,
-    { label: 'Earthing System', value: earthingMap[supply.earthingType ?? ''] ?? '—' },
+    { label: 'Earthing System', value: earthingMap[supply.earthingType ?? ''] ?? '--' },
     { label: 'Supply Type', value: s(supply.supplyType) },
   )
 
@@ -398,37 +402,37 @@ function drawSupplyPage(
     '3PH_3WIRE': '3-phase 3-wire', '3PH_4WIRE': '3-phase 4-wire',
   }
   y = drawFieldPair(page, fonts.regular, fonts.bold, y,
-    { label: 'Conductor Config', value: configMap[supply.conductorConfig] ?? '—' },
-    { label: 'Nominal Voltage', value: supply.nominalVoltage != null ? `${supply.nominalVoltage}V` : '—' },
+    { label: 'Conductor Config', value: configMap[supply.conductorConfig] ?? '--' },
+    { label: 'Nominal Voltage', value: supply.nominalVoltage != null ? `${supply.nominalVoltage}V` : '--' },
   )
   y = drawFieldPair(page, fonts.regular, fonts.bold, y,
-    { label: 'Nominal Frequency', value: supply.nominalFrequency != null ? `${supply.nominalFrequency}Hz` : '—' },
-    { label: 'Prospective Fault (Ipf)', value: supply.ipf != null ? `${supply.ipf} kA` : '—' },
+    { label: 'Nominal Frequency', value: supply.nominalFrequency != null ? `${supply.nominalFrequency}Hz` : '--' },
+    { label: 'Prospective Fault (Ipf)', value: supply.ipf != null ? `${supply.ipf} kA` : '--' },
   )
   y = drawFieldPair(page, fonts.regular, fonts.bold, y,
-    { label: 'External Ze', value: supply.ze != null ? `${supply.ze}Ω` : '—' },
+    { label: 'External Ze', value: supply.ze != null ? `${supply.ze} ohm` : '--' },
     { label: 'Polarity Confirmed', value: supply.supplyPolarityConfirmed ? 'Yes' : 'No' },
   )
-  y = drawField(page, fonts.regular, fonts.bold, y, 'Other Sources', supply.otherSourcesPresent ? `Yes — ${supply.otherSourcesDescription ?? ''}` : 'No')
+  y = drawField(page, fonts.regular, fonts.bold, y, 'Other Sources', supply.otherSourcesPresent ? `Yes - ${supply.otherSourcesDescription ?? ''}` : 'No')
   y = drawFieldPair(page, fonts.regular, fonts.bold, y,
     { label: 'Supply Device BS(EN)', value: s(supply.supplyDeviceBsEn) },
     { label: 'Supply Device Type', value: s(supply.supplyDeviceType) },
   )
-  y = drawField(page, fonts.regular, fonts.bold, y, 'Supply Device Rating', supply.supplyDeviceRating != null ? `${supply.supplyDeviceRating}A` : '—')
+  y = drawField(page, fonts.regular, fonts.bold, y, 'Supply Device Rating', supply.supplyDeviceRating != null ? `${supply.supplyDeviceRating}A` : '--')
   y -= SPACING.sectionGap
 
   // --- Section J: Installation Particulars ---
-  y = drawSectionHeader(page, fonts.bold, y, 'Section J — Particulars of the Installation at the Origin')
+  y = drawSectionHeader(page, fonts.bold, y, 'Section J - Particulars of the Installation at the Origin')
 
   y = drawField(page, fonts.regular, fonts.bold, y, 'Means of Earthing',
-    install.distributorFacility ? 'Distributor facility' : install.installationElectrode ? 'Installation electrode' : '—')
+    install.distributorFacility ? 'Distributor facility' : install.installationElectrode ? 'Installation electrode' : '--')
 
   if (install.installationElectrode) {
     y = drawFieldPair(page, fonts.regular, fonts.bold, y,
       { label: 'Electrode Type', value: s(install.electrodeType) },
       { label: 'Electrode Location', value: s(install.electrodeLocation) },
     )
-    y = drawField(page, fonts.regular, fonts.bold, y, 'Electrode Resistance', install.electrodeResistance != null ? `${install.electrodeResistance}Ω` : '—')
+    y = drawField(page, fonts.regular, fonts.bold, y, 'Electrode Resistance', install.electrodeResistance != null ? `${install.electrodeResistance} ohm` : '--')
   }
 
   y = drawFieldPair(page, fonts.regular, fonts.bold, y,
@@ -436,13 +440,13 @@ function drawSupplyPage(
     { label: 'Main Switch BS(EN)', value: s(install.mainSwitchBsEn) },
   )
   y = drawFieldPair(page, fonts.regular, fonts.bold, y,
-    { label: 'Poles', value: install.mainSwitchPoles != null ? `${install.mainSwitchPoles}P` : '—' },
-    { label: 'Current Rating', value: install.mainSwitchCurrentRating != null ? `${install.mainSwitchCurrentRating}A` : '—' },
+    { label: 'Poles', value: install.mainSwitchPoles != null ? `${install.mainSwitchPoles}P` : '--' },
+    { label: 'Current Rating', value: install.mainSwitchCurrentRating != null ? `${install.mainSwitchCurrentRating}A` : '--' },
   )
 
   y = drawFieldPair(page, fonts.regular, fonts.bold, y,
-    { label: 'Earthing Conductor', value: `${install.earthingConductorMaterial ?? 'COPPER'} ${install.earthingConductorCsa != null ? `${install.earthingConductorCsa}mm²` : '—'} ${install.earthingConductorVerified ? '✓' : ''}` },
-    { label: 'Bonding Conductor', value: `${install.bondingConductorMaterial ?? 'COPPER'} ${install.bondingConductorCsa != null ? `${install.bondingConductorCsa}mm²` : '—'} ${install.bondingConductorVerified ? '✓' : ''}` },
+    { label: 'Earthing Conductor', value: `${install.earthingConductorMaterial ?? 'COPPER'} ${install.earthingConductorCsa != null ? `${install.earthingConductorCsa}mm2` : '--'} ${install.earthingConductorVerified ? 'OK' : ''}` },
+    { label: 'Bonding Conductor', value: `${install.bondingConductorMaterial ?? 'COPPER'} ${install.bondingConductorCsa != null ? `${install.bondingConductorCsa}mm2` : '--'} ${install.bondingConductorVerified ? 'OK' : ''}` },
   )
 
   const bondItems = [
@@ -456,7 +460,7 @@ function drawSupplyPage(
 
   const bondStr = bondItems
     .filter(([, v]) => v && v !== 'NA')
-    .map(([k, v]) => `${k}: ${v === 'SATISFACTORY' ? '✓' : '✗'}`)
+    .map(([k, v]) => `${k}: ${v === 'SATISFACTORY' ? 'OK' : 'X'}`)
     .join('  |  ')
 
   if (bondStr) {
@@ -484,7 +488,7 @@ function drawObservationsPages(
   let pageNum = startPage
   let y = drawHeader(page, fonts, cert.reportNumber, pageNum)
 
-  y = drawSectionHeader(page, fonts.bold, y, 'Section K — Observations and Recommendations')
+  y = drawSectionHeader(page, fonts.bold, y, 'Section K - Observations and Recommendations')
 
   const columns = [
     { label: 'Item', width: 30, align: 'center' as const },
@@ -506,11 +510,11 @@ function drawObservationsPages(
       page = pdfDoc.addPage([PAGE.width, PAGE.height])
       pageNum++
       y = drawHeader(page, fonts, cert.reportNumber, pageNum)
-      y = drawSectionHeader(page, fonts.bold, y, 'Section K — Observations (continued)')
+      y = drawSectionHeader(page, fonts.bold, y, 'Section K - Observations (continued)')
       y = drawTableHeader(page, fonts.bold, y, columns)
     }
 
-    // Draw the row — leave code cell empty (we draw it separately with colour)
+    // Draw the row - leave code cell empty (we draw it separately with colour)
     y = drawTableRow(
       page, fonts.regular, y,
       columns.map((c) => ({ width: c.width, align: c.align })),
@@ -619,14 +623,14 @@ function drawInspectionPages(
       color: COLOURS.text,
     })
 
-    const outcome = item.outcome ?? '—'
+    const outcome = item.outcome ?? '--'
     const outcomeColour =
       outcome === 'PASS' ? COLOURS.pass
         : outcome === 'C1' ? COLOURS.fail
           : outcome === 'C2' ? COLOURS.c2
             : COLOURS.muted
 
-    const outcomeText = outcome === 'PASS' ? '✓' : outcome
+    const outcomeText = outcome === 'PASS' ? 'OK' : outcome
     const ow = fonts.bold.widthOfTextAtSize(outcomeText, FONT.tableBody)
     page.drawText(outcomeText, {
       x: PAGE.width - PAGE.marginRight - ow - 4,
@@ -686,7 +690,7 @@ function drawCircuitPages(
     { label: 'OCPD', width: 32, align: 'center' as const },
     { label: 'Rating', width: 34, align: 'center' as const },
     { label: 'RCD', width: 28, align: 'center' as const },
-    { label: 'IΔn', width: 28, align: 'center' as const },
+    { label: 'Idn', width: 28, align: 'center' as const },
   ]
 
   const row2Cols = [
@@ -736,7 +740,7 @@ function drawCircuitPages(
       color: COLOURS.accent,
     })
 
-    page.drawText(`DB: ${board.dbReference ?? '—'} — ${board.dbLocation ?? ''}  |  Zs at DB: ${board.zsAtDb ?? '—'}Ω  |  Ipf: ${board.ipfAtDb ?? '—'} kA`, {
+    page.drawText(`DB: ${board.dbReference ?? '--'} - ${board.dbLocation ?? ''}  |  Zs at DB: ${board.zsAtDb ?? '--'} ohm  |  Ipf: ${board.ipfAtDb ?? '--'} kA`, {
       x: PAGE.marginLeft + 8,
       y: y - 10,
       size: FONT.tableBody,
@@ -757,7 +761,7 @@ function drawCircuitPages(
         page = pdfDoc.addPage([PAGE.width, PAGE.height])
         pageNum++
         y = drawHeader(page, fonts, cert.reportNumber, pageNum)
-        y = drawSectionHeader(page, fonts.bold, y, `Circuit Schedule (continued) — ${board.dbReference}`)
+        y = drawSectionHeader(page, fonts.bold, y, `Circuit Schedule (continued) - ${board.dbReference}`)
         y = drawTableHeader(page, fonts.bold, y, row1Cols)
         y = drawTableHeader(page, fonts.bold, y, row2Cols)
       }
@@ -768,14 +772,14 @@ function drawCircuitPages(
         [
           s(c.circuitNumber),
           (c.circuitDescription ?? '').substring(0, 18),
-          c.wiringType ?? '—',
-          c.referenceMethod ?? '—',
+          c.wiringType ?? '--',
+          c.referenceMethod ?? '--',
           s(c.numberOfPoints),
           s(c.liveConductorCsa),
           s(c.cpcCsa),
-          `${c.ocpdType ?? ''}${c.ocpdRating ?? ''}` || '—',
-          c.ocpdBsEn ? c.ocpdBsEn.substring(0, 6) : '—',
-          c.rcdType ?? '—',
+          `${c.ocpdType ?? ''}${c.ocpdRating ?? ''}` || '--',
+          c.ocpdBsEn ? c.ocpdBsEn.substring(0, 6) : '--',
+          c.rcdType ?? '--',
           s(c.rcdRating),
         ],
         { isAlt: ci % 2 === 1 },
@@ -795,7 +799,7 @@ function drawCircuitPages(
           s(c.irLiveLive),
           s(c.irLiveEarth),
           s(c.zs),
-          c.polarity === 'TICK' ? '✓' : c.polarity === 'CROSS' ? '✗' : '—',
+          c.polarity === 'TICK' ? 'OK' : c.polarity === 'CROSS' ? 'X' : '--',
           s(c.rcdDisconnectionTime),
           (c.remarks ?? '').substring(0, 12),
         ],
@@ -814,7 +818,7 @@ function drawCircuitPages(
 
 /**
  * Generate a complete EICR PDF from certificate data.
- * Returns raw bytes — use generateEICRBlobUrl() for browser download.
+ * Returns raw bytes - use generateEICRBlobUrl() for browser download.
  */
 export async function generateEICRPdf(cert: EICRCertificate): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create()
@@ -825,7 +829,7 @@ export async function generateEICRPdf(cert: EICRCertificate): Promise<Uint8Array
   pdfDoc.setTitle(`EICR Report ${cert.reportNumber ?? ''}`)
   pdfDoc.setAuthor(cert.declaration?.inspectorName || 'CertVoice')
   pdfDoc.setSubject('Electrical Installation Condition Report')
-  pdfDoc.setCreator('CertVoice — certvoice.co.uk')
+  pdfDoc.setCreator('CertVoice - certvoice.co.uk')
   pdfDoc.setCreationDate(new Date())
 
   // Page 1: Sections A-D
