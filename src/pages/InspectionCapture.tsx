@@ -149,6 +149,7 @@ export default function InspectionCapture() {
     try {
       await downloadEICRPdf(certificate as EICRCertificate)
     } catch (err) {
+      console.error('PDF export failed:', err)
       captureError(err, 'InspectionCapture.handleExportPdf')
     } finally {
       setIsExporting(false)
