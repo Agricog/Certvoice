@@ -4,14 +4,17 @@
  * Calls the claude-proxy worker to polish raw observation text
  * into professional BS 7671 wording with regulation references.
  *
+ * Requires Clerk JWT (same auth pattern as useAIExtraction).
+ *
  * Usage:
  *   const { polish, isPolishing, error } = useObservationPolish()
- *   const result = await polish(rawText, 'C2', { location, circuitRef })
+ *   const result = await polish(rawText, 'C2', getToken, { location, circuitRef })
  *
  * Drop into: src/hooks/useObservationPolish.ts
  */
 
 import { useState, useCallback } from 'react'
+import type { GetToken } from '../services/uploadService'
 
 // ============================================================
 // TYPES
@@ -33,6 +36,7 @@ interface UseObservationPolishReturn {
   polish: (
     rawText: string,
     classificationCode: string,
+    getToken: GetToken,
     context?: PolishContext
   ) => Promise<PolishResult | null>
   isPolishing: boolean
@@ -57,15 +61,25 @@ export function useObservationPolish(): UseObservationPolishReturn {
     async (
       rawText: string,
       classificationCode: string,
+      getToken: GetToken,
       context?: PolishContext
     ): Promise<PolishResult | null> => {
       setIsPolishing(true)
       setError(null)
 
       try {
+        // Get fresh Clerk JWT
+        const token = await getToken()
+        if (!token) {
+          throw new Error('Not authenticated')
+        }
+
         const response = await fetch(`${API_BASE}/api/polish-observation`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
           body: JSON.stringify({
             rawText,
             classificationCode,
