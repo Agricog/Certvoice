@@ -1,11 +1,11 @@
 /**
  * CertVoice — Certificates Page
  *
- * List of all EICR certificates with search, status filtering,
- * and quick access to continue drafts or view completed PDFs.
+ * List of all certificates (EICR + Minor Works) with search,
+ * status filtering, and cert type filtering.
  *
  * Offline-first: loads from IndexedDB immediately, then merges
- * API results when online. Shows overall assessment badge.
+ * API results when online.
  *
  * @module pages/Certificates
  */
@@ -25,12 +25,15 @@ import {
   Send,
   RefreshCw,
   WifiOff,
+  Wrench,
+  ClipboardList,
 } from 'lucide-react'
 import type {
   EICRCertificate,
   CertificateStatus,
   ClassificationCode,
 } from '../types/eicr'
+import type { CertificateType } from '../types/minorWorks'
 import { captureError } from '../utils/errorTracking'
 import { listLocalCertificates } from '../services/offlineStore'
 import { listCertificates } from '../services/certificateApi'
@@ -41,12 +44,14 @@ import { useApiToken } from '../hooks/useApiToken'
 // ============================================================
 
 type StatusFilter = 'ALL' | CertificateStatus
+type CertTypeFilter = 'ALL' | CertificateType
 type OverallAssessment = 'SATISFACTORY' | 'UNSATISFACTORY' | null
 
 interface CertificateListItem {
   id: string
   reportNumber: string
   status: CertificateStatus
+  certificateType: CertificateType
   clientName: string
   installationAddress: string
   inspectionDate: string | null
@@ -56,6 +61,8 @@ interface CertificateListItem {
   hasPdf: boolean
   updatedAt: string
   isLocal: boolean
+  /** MW: description of work (shown instead of circuit count) */
+  descriptionOfWork?: string
 }
 
 // ============================================================
@@ -108,12 +115,40 @@ function formatTimeAgo(iso: string): string {
 }
 
 function mapCertToListItem(cert: Partial<EICRCertificate>, isLocal = false): CertificateListItem {
+  // Detect Minor Works certificates stored via IndexedDB (cast through unknown)
+  const raw = cert as unknown as Record<string, unknown>
+  const isMW = raw.certificateType === 'MINOR_WORKS'
+
+  if (isMW) {
+    const mw = raw as Record<string, unknown>
+    const client = mw.clientDetails as Record<string, string> | undefined
+    const desc = mw.description as Record<string, string> | undefined
+    return {
+      id: String(mw.id ?? ''),
+      reportNumber: '',
+      status: (mw.status as CertificateStatus) ?? 'DRAFT',
+      certificateType: 'MINOR_WORKS',
+      clientName: client?.clientName ?? 'No client',
+      installationAddress: client?.clientAddress ?? 'No address',
+      inspectionDate: desc?.dateOfCompletion ?? null,
+      circuitCount: 0,
+      observationCounts: { C1: 0, C2: 0, C3: 0, FI: 0 },
+      overallAssessment: null,
+      hasPdf: false,
+      updatedAt: String(mw.updatedAt ?? ''),
+      isLocal,
+      descriptionOfWork: desc?.descriptionOfWork ?? '',
+    }
+  }
+
+  // EICR certificate
   const observations = cert.observations ?? []
   const assessment = cert.summaryOfCondition?.overallAssessment ?? null
   return {
     id: cert.id ?? '',
     reportNumber: cert.reportNumber ?? '',
     status: cert.status ?? 'DRAFT',
+    certificateType: 'EICR',
     clientName: cert.clientDetails?.clientName ?? 'No client',
     installationAddress: cert.installationDetails?.installationAddress ?? 'No address',
     inspectionDate: cert.reportReason?.inspectionDates?.[0] ?? null,
@@ -132,6 +167,9 @@ function mapCertToListItem(cert: Partial<EICRCertificate>, isLocal = false): Cer
 }
 
 function getCertLink(cert: CertificateListItem): string {
+  if (cert.certificateType === 'MINOR_WORKS') {
+    return `/minor-works/${cert.id}`
+  }
   switch (cert.status) {
     case 'DRAFT':
       return '/new'
@@ -152,6 +190,7 @@ export default function Certificates() {
   const [isOffline, setIsOffline] = useState(!navigator.onLine)
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL')
+  const [certTypeFilter, setCertTypeFilter] = useState<CertTypeFilter>('ALL')
 
   // ---- Connectivity listener ----
   useEffect(() => {
@@ -220,6 +259,11 @@ export default function Certificates() {
     try {
       let results = [...certificates]
 
+      // Cert type filter
+      if (certTypeFilter !== 'ALL') {
+        results = results.filter((c) => c.certificateType === certTypeFilter)
+      }
+
       if (statusFilter !== 'ALL') {
         results = results.filter((c) => c.status === statusFilter)
       }
@@ -229,7 +273,8 @@ export default function Certificates() {
         results = results.filter((c) =>
           c.installationAddress.toLowerCase().includes(q) ||
           c.clientName.toLowerCase().includes(q) ||
-          c.reportNumber.toLowerCase().includes(q)
+          c.reportNumber.toLowerCase().includes(q) ||
+          (c.descriptionOfWork ?? '').toLowerCase().includes(q)
         )
       }
 
@@ -244,7 +289,7 @@ export default function Certificates() {
       captureError(err, 'Certificates.filteredCerts')
       return []
     }
-  }, [certificates, searchQuery, statusFilter])
+  }, [certificates, searchQuery, statusFilter, certTypeFilter])
 
   // ---- Stats ----
   const stats = useMemo(() => ({
@@ -254,11 +299,23 @@ export default function Certificates() {
     completed: certificates.filter((c) => c.status === 'COMPLETE' || c.status === 'ISSUED').length,
   }), [certificates])
 
+  const certTypeCounts = useMemo(() => ({
+    all: certificates.length,
+    eicr: certificates.filter((c) => c.certificateType === 'EICR').length,
+    mw: certificates.filter((c) => c.certificateType === 'MINOR_WORKS').length,
+  }), [certificates])
+
   const FILTERS: Array<{ value: StatusFilter; label: string; count: number }> = [
     { value: 'ALL', label: 'All', count: stats.total },
     { value: 'IN_PROGRESS', label: 'Active', count: stats.active },
     { value: 'DRAFT', label: 'Drafts', count: stats.drafts },
     { value: 'COMPLETE', label: 'Done', count: stats.completed },
+  ]
+
+  const CERT_TYPE_FILTERS: Array<{ value: CertTypeFilter; label: string; count: number; icon: React.ElementType }> = [
+    { value: 'ALL', label: 'All Types', count: certTypeCounts.all, icon: FileText },
+    { value: 'EICR', label: 'EICR', count: certTypeCounts.eicr, icon: ClipboardList },
+    { value: 'MINOR_WORKS', label: 'Minor Works', count: certTypeCounts.mw, icon: Wrench },
   ]
 
   // ============================================================
@@ -269,7 +326,7 @@ export default function Certificates() {
     <>
       <Helmet>
         <title>Certificates | CertVoice</title>
-        <meta name="description" content="All your EICR certificates — search, filter, and manage." />
+        <meta name="description" content="All your electrical certificates — search, filter, and manage." />
       </Helmet>
 
       <div className="min-h-screen bg-certvoice-bg">
@@ -309,7 +366,7 @@ export default function Certificates() {
               className="cv-btn-primary px-3 py-1.5 text-xs flex items-center gap-1.5"
             >
               <FileText className="w-3.5 h-3.5" />
-              New EICR
+              New
             </Link>
           </div>
         </div>
@@ -350,7 +407,7 @@ export default function Certificates() {
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search by address, client, or report no."
+                  placeholder="Search by address, client, report no., or description"
                   className="w-full bg-certvoice-surface border border-certvoice-border rounded-lg
                              pl-9 pr-3 py-2.5 text-sm text-certvoice-text
                              placeholder:text-certvoice-muted/50 outline-none
@@ -358,7 +415,32 @@ export default function Certificates() {
                 />
               </div>
 
-              {/* Filter Tabs */}
+              {/* Cert Type Filter */}
+              {certificates.length > 0 && certTypeCounts.mw > 0 && (
+                <div className="flex gap-1">
+                  {CERT_TYPE_FILTERS.map((f) => {
+                    const Icon = f.icon
+                    return (
+                      <button
+                        key={f.value}
+                        type="button"
+                        onClick={() => setCertTypeFilter(f.value)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                          certTypeFilter === f.value
+                            ? 'bg-certvoice-accent/15 border-certvoice-accent text-certvoice-accent'
+                            : 'bg-certvoice-surface border-certvoice-border text-certvoice-muted hover:border-certvoice-muted'
+                        }`}
+                      >
+                        <Icon className="w-3 h-3" />
+                        {f.label}
+                        <span className="opacity-60">{f.count}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Status Filter Tabs */}
               {certificates.length > 0 && (
                 <div className="flex gap-1 bg-certvoice-surface border border-certvoice-border rounded-lg p-1">
                   {FILTERS.map((f) => (
@@ -390,7 +472,7 @@ export default function Certificates() {
                     <p className="text-xs text-certvoice-muted mt-1">
                       {searchQuery
                         ? 'Try a different search term'
-                        : 'Start your first EICR inspection to see it here'}
+                        : 'Start your first certificate to see it here'}
                     </p>
                     {!searchQuery && (
                       <Link
@@ -398,7 +480,7 @@ export default function Certificates() {
                         className="cv-btn-primary inline-flex items-center gap-2 mt-4 px-4 py-2 text-xs"
                       >
                         <FileText className="w-3.5 h-3.5" />
-                        New EICR Inspection
+                        New Certificate
                       </Link>
                     )}
                   </div>
@@ -406,6 +488,7 @@ export default function Certificates() {
                   filteredCerts.map((cert) => {
                     const config = getStatusConfig(cert.status)
                     const StatusIcon = config.icon
+                    const isMW = cert.certificateType === 'MINOR_WORKS'
                     const { C1, C2, C3, FI } = cert.observationCounts
 
                     return (
@@ -421,10 +504,20 @@ export default function Certificates() {
                               {cert.installationAddress}
                             </div>
                             <div className="text-xs text-certvoice-muted mt-0.5">
-                              {cert.clientName} · {cert.reportNumber}
+                              {cert.clientName}
+                              {cert.reportNumber ? ` · ${cert.reportNumber}` : ''}
                             </div>
                           </div>
                           <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                            {/* Cert type badge */}
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                              isMW
+                                ? 'bg-certvoice-amber/15 text-certvoice-amber'
+                                : 'bg-certvoice-accent/15 text-certvoice-accent'
+                            }`}>
+                              {isMW ? 'MW' : 'EICR'}
+                            </span>
+
                             {cert.overallAssessment && (
                               <span
                                 className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
@@ -445,21 +538,29 @@ export default function Certificates() {
 
                         {/* Stats row */}
                         <div className="flex items-center gap-3 text-xs">
-                          <span className="text-certvoice-muted">
-                            {cert.circuitCount} circuit{cert.circuitCount !== 1 ? 's' : ''}
-                          </span>
+                          {isMW ? (
+                            <span className="text-certvoice-muted truncate max-w-[200px]">
+                              {cert.descriptionOfWork || 'No description'}
+                            </span>
+                          ) : (
+                            <>
+                              <span className="text-certvoice-muted">
+                                {cert.circuitCount} circuit{cert.circuitCount !== 1 ? 's' : ''}
+                              </span>
 
-                          {C1 > 0 && (
-                            <span className="cv-code-c1 text-[10px] px-1.5 py-0.5 rounded">C1: {C1}</span>
-                          )}
-                          {C2 > 0 && (
-                            <span className="cv-code-c2 text-[10px] px-1.5 py-0.5 rounded">C2: {C2}</span>
-                          )}
-                          {C3 > 0 && (
-                            <span className="cv-code-c3 text-[10px] px-1.5 py-0.5 rounded">C3: {C3}</span>
-                          )}
-                          {FI > 0 && (
-                            <span className="cv-code-fi text-[10px] px-1.5 py-0.5 rounded">FI: {FI}</span>
+                              {C1 > 0 && (
+                                <span className="cv-code-c1 text-[10px] px-1.5 py-0.5 rounded">C1: {C1}</span>
+                              )}
+                              {C2 > 0 && (
+                                <span className="cv-code-c2 text-[10px] px-1.5 py-0.5 rounded">C2: {C2}</span>
+                              )}
+                              {C3 > 0 && (
+                                <span className="cv-code-c3 text-[10px] px-1.5 py-0.5 rounded">C3: {C3}</span>
+                              )}
+                              {FI > 0 && (
+                                <span className="cv-code-fi text-[10px] px-1.5 py-0.5 rounded">FI: {FI}</span>
+                              )}
+                            </>
                           )}
 
                           {cert.hasPdf && (
@@ -475,7 +576,9 @@ export default function Certificates() {
                         {/* Date row */}
                         <div className="flex items-center justify-between mt-2">
                           <span className="text-[10px] text-certvoice-muted/60">
-                            Inspected: {cert.inspectionDate ? formatDate(cert.inspectionDate) : '—'}
+                            {isMW
+                              ? `Completed: ${cert.inspectionDate ? formatDate(cert.inspectionDate) : '—'}`
+                              : `Inspected: ${cert.inspectionDate ? formatDate(cert.inspectionDate) : '—'}`}
                             {cert.isLocal && ' · Local only'}
                           </span>
                           <ChevronRight className="w-3 h-3 text-certvoice-muted/40" />
