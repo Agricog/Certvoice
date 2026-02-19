@@ -3,6 +3,7 @@
  *
  * Canvas-based signature pad for Section G declaration.
  * Captures signature as PNG, uploads to R2.
+ * Offline-aware: queues signature in IndexedDB when no signal.
  *
  * Props:
  *   - certificateId: UUID of the certificate
@@ -16,7 +17,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { uploadFile, getFileUrl, deleteFile, type GetToken } from '../services/uploadService'
+import { uploadFileOffline, getFileUrlOffline, deleteFileOffline, type GetToken } from '../services/uploadService'
 
 // ============================================================
 // TYPES
@@ -57,7 +58,7 @@ export default function SignatureCapture({
   useEffect(() => {
     if (signatureKey && !previewUrl) {
       setState('saved')
-      getFileUrl(signatureKey, getToken)
+      getFileUrlOffline(signatureKey, getToken)
         .then((url) => setPreviewUrl(url))
         .catch(() => {})
     }
@@ -177,8 +178,8 @@ export default function SignatureCapture({
         )
       })
 
-      // Upload
-      const result = await uploadFile(blob, 'signature', certificateId, getToken)
+      // Upload (queues offline if no signal)
+      const result = await uploadFileOffline(blob, 'signature', certificateId, getToken)
 
       // Set preview from canvas data (avoids extra download)
       const dataUrl = canvas.toDataURL('image/png')
@@ -194,9 +195,9 @@ export default function SignatureCapture({
   }, [certificateId, hasStrokes, onSignatureChange, getToken])
 
   const handleClear = useCallback(async () => {
-    // Delete from R2 if saved
+    // Delete from R2 or remove from offline queue
     if (signatureKey) {
-      deleteFile(signatureKey, getToken).catch(() => {})
+      deleteFileOffline(signatureKey, getToken).catch(() => {})
     }
 
     // Clean up preview
