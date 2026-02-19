@@ -9,6 +9,7 @@
  *   /new                 — Start new certificate (protected)
  *   /inspect/:id         — EICR capture workflow (protected)
  *   /minor-works/:id     — Minor Works capture workflow (protected)
+ *   /eic/:id             — EIC capture workflow (protected)
  *   /certificates        — All completed certificates (protected)
  *   /settings            — Engineer profile, instruments, signature (protected)
  *   /subscription        — Stripe billing management (protected)
@@ -27,13 +28,13 @@ import Home from './pages/Home'
 import NewInspection from './pages/NewInspection'
 import InspectionCapture from './pages/InspectionCapture'
 import MinorWorksCapture from './pages/MinorWorksCapture'
+import EICCapture from './pages/EICCapture'
 import Certificates from './pages/Certificates'
 import Settings from './pages/Settings'
 import Subscription from './pages/Subscription'
 import AuthPage from './pages/AuthPage'
 import PrivacyPolicy from './pages/PrivacyPolicy'
 import TermsOfService from './pages/TermsOfService'
-import EICCapture from './pages/EICCapture'
 // --- Component imports ---
 import BottomNav from './components/BottomNav'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -78,10 +79,10 @@ export default function App() {
           <Route path="/new" element={<ProtectedRoute><NewInspection /></ProtectedRoute>} />
           <Route path="/inspect/:id" element={<ProtectedRoute><InspectionCapture /></ProtectedRoute>} />
           <Route path="/minor-works/:id" element={<ProtectedRoute><MinorWorksCapture /></ProtectedRoute>} />
+          <Route path="/eic/:id" element={<ProtectedRoute><EICCapture /></ProtectedRoute>} />
           <Route path="/certificates" element={<ProtectedRoute><Certificates /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="/subscription" element={<ProtectedRoute><Subscription /></ProtectedRoute>} />
-          <Route path="/eic/:id" element={<EICCapture />} />
           {/* 404 */}
           <Route path="*" element={<NotFound />} />
         </SentryRoutes>
