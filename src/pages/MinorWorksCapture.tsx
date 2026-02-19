@@ -41,6 +41,7 @@ import {
   EMPTY_SCHEME_NOTIFICATION,
 } from '../types/minorWorks';
 import type { ClientDetails, TestInstruments } from '../types/eicr';
+import { generateMinorWorksPdf } from '../services/minorWorksPdf';
 
 // ── Section collapse state ──────────────────────────────────────
 type SectionKey =
@@ -346,6 +347,44 @@ export default function MinorWorksCapture() {
     mediaRecorderRef.current?.stop();
   }, []);
 
+  // ── PDF download & share ──────────────────────────────────────
+  const pdfBlobRef = useRef<string | null>(null);
+
+  const handleDownloadPdf = useCallback(() => {
+    if (!cert) return;
+    const blob = generateMinorWorksPdf(cert);
+    if (pdfBlobRef.current) URL.revokeObjectURL(pdfBlobRef.current);
+    const url = URL.createObjectURL(blob);
+    pdfBlobRef.current = url;
+    const a = document.createElement('a');
+    a.href = url;
+    const addr = cert.clientDetails.clientAddress.split('\n')[0]?.trim().replace(/[^a-zA-Z0-9]/g, '_') || 'MinorWorks';
+    a.download = `MW_${addr}_${cert.description.dateOfCompletion || 'draft'}.pdf`;
+    a.click();
+  }, [cert]);
+
+  const handleSharePdf = useCallback(async () => {
+    if (!cert) return;
+    const blob = generateMinorWorksPdf(cert);
+    const addr = cert.clientDetails.clientAddress.split('\n')[0]?.trim().replace(/[^a-zA-Z0-9]/g, '_') || 'MinorWorks';
+    const filename = `MW_${addr}_${cert.description.dateOfCompletion || 'draft'}.pdf`;
+
+    if (navigator.share && navigator.canShare) {
+      const file = new File([blob], filename, { type: 'application/pdf' });
+      try {
+        await navigator.share({ files: [file], title: 'Minor Works Certificate' });
+        return;
+      } catch {
+        // User cancelled or share failed — fall through to mailto
+      }
+    }
+
+    // Fallback: download + mailto
+    handleDownloadPdf();
+    const subject = encodeURIComponent(`Minor Works Certificate — ${cert.clientDetails.clientAddress.split('\n')[0] || ''}`);
+    window.location.href = `mailto:?subject=${subject}&body=${encodeURIComponent('Please find the Minor Works Certificate attached.')}`;
+  }, [cert, handleDownloadPdf]);
+
   // ── Render helpers ──────────────────────────────────────────
   if (loading || !cert) {
     return (
@@ -403,12 +442,14 @@ export default function MinorWorksCapture() {
                 {isComplete ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
               </button>
               <button
+                onClick={handleDownloadPdf}
                 className="p-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800"
                 title="Download PDF"
               >
                 <Download size={18} />
               </button>
               <button
+                onClick={handleSharePdf}
                 className="p-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800"
                 title="Share"
               >
