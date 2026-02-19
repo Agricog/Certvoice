@@ -215,7 +215,7 @@ export async function updateCertificateField(
       const record = getReq.result as StoredCertificate | undefined
       if (!record) { resolve(); return }
 
-      record.data[field] = value
+      (record.data as Record<string, unknown>)[field] = value
       const putReq = store.put(record)
       putReq.onsuccess = () => resolve()
       putReq.onerror = () => reject(new Error('Failed to update certificate field'))
