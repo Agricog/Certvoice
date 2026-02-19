@@ -1,8 +1,12 @@
 /**
- * CertVoice — Sync Service (v3)
+ * CertVoice — Sync Service (v4)
  *
  * Background sync engine — watches connectivity and pushes dirty
  * certificates to the API when online.
+ *
+ * v4 changes:
+ *   - Photo queue: uploads offline-queued photos to R2 before cert sync
+ *   - Replaces offline:xxx temp keys with real R2 keys in cert data
  *
  * v3 changes:
  *   - Multi-cert-type: handles EICR (sync endpoint) and MW (create+update)
@@ -18,7 +22,9 @@
  * Strategy:
  *   1. Every certificate change saves to IndexedDB immediately (instant)
  *   2. Certificate is marked dirty with lastModified timestamp
- *   3. When online + authenticated, sync service picks up dirty certs
+ *   3. When online + authenticated, sync service:
+ *      a. Drains photo queue first (upload blobs, replace temp keys)
+ *      b. Then syncs dirty certificates
  *   4. EICR: calls /sync endpoint with boards/circuits/observations
  *   5. MW: calls createCertificate (if new) or updateCertificate (if exists)
  *   6. On success: marks certificate clean
@@ -34,8 +40,12 @@ import {
   markSynced,
   isOnline,
   onConnectivityChange,
+  getPendingPhotos,
+  removePhotoQueueItem,
+  getCertificate as getLocalCertificate,
+  saveCertificate as saveToLocal,
 } from './offlineStore'
-import type { StoredCertificate } from './offlineStore'
+import type { StoredCertificate, QueuedPhoto } from './offlineStore'
 import {
   syncCertificate,
   createCertificate,
@@ -43,6 +53,8 @@ import {
   ApiAuthError,
   ApiRateLimitError,
 } from './certificateApi'
+import { uploadFile, isOfflineKey } from './uploadService'
+import type { EICRCertificate, Observation, Declaration } from '../types/eicr'
 
 // ============================================================
 // TYPES
@@ -101,6 +113,102 @@ export function createSyncService(
     notify()
   }
 
+  // --- Photo queue processing ---
+  /**
+   * Upload all queued photos to R2, then replace temp keys in their
+   * parent certificates. This runs BEFORE certificate sync so the
+   * cert data sent to the server already has real R2 keys.
+   */
+  async function processPhotoQueue(): Promise<void> {
+    let pending: QueuedPhoto[]
+    try {
+      pending = await getPendingPhotos()
+    } catch {
+      return // IndexedDB read failed — skip, will retry next cycle
+    }
+
+    if (pending.length === 0) return
+
+    for (const photo of pending) {
+      try {
+        // Upload the blob to R2 (uses pure network function, not offline wrapper)
+        const result = await uploadFile(
+          photo.blob,
+          photo.fileType,
+          photo.certId,
+          getToken
+        )
+
+        const realKey = result.key
+        const tempKey = photo.tempKey
+
+        // Replace temp key in the parent certificate's IndexedDB data
+        await replaceTempKeyInCert(photo.certId, tempKey, realKey)
+
+        // Remove from photo queue
+        if (photo.id != null) {
+          await removePhotoQueueItem(photo.id)
+        }
+      } catch (err) {
+        // Auth/rate-limit errors bubble up to stop the whole sync
+        if (err instanceof ApiAuthError || err instanceof ApiRateLimitError) {
+          throw err
+        }
+        // Other errors (network hiccup) — skip this photo, retry next cycle
+        console.warn(`[SyncService] Photo upload failed for ${photo.tempKey}:`, err)
+      }
+    }
+  }
+
+  /**
+   * Find a temp key in a certificate's observations/declaration and
+   * replace it with the real R2 key. Marks the cert dirty so the
+   * subsequent cert sync pushes the updated keys to the server.
+   */
+  async function replaceTempKeyInCert(
+    certId: string,
+    tempKey: string,
+    realKey: string
+  ): Promise<void> {
+    const stored = await getLocalCertificate(certId)
+    if (!stored) return
+
+    const cert = stored.data
+    let changed = false
+
+    // Search observations → photoKeys
+    if (cert.observations) {
+      const observations = cert.observations as Observation[]
+      for (const obs of observations) {
+        if (obs.photoKeys) {
+          const idx = obs.photoKeys.indexOf(tempKey)
+          if (idx !== -1) {
+            obs.photoKeys[idx] = realKey
+            changed = true
+          }
+        }
+      }
+    }
+
+    // Search declaration → inspector/QS signature keys
+    if (cert.declaration) {
+      const decl = cert.declaration as Declaration
+      if (decl.inspectorSignatureKey === tempKey) {
+        decl.inspectorSignatureKey = realKey
+        changed = true
+      }
+      if (decl.qsSignatureKey === tempKey) {
+        decl.qsSignatureKey = realKey
+        changed = true
+      }
+    }
+
+    if (changed) {
+      // Save back with dirty flag so cert sync picks it up
+      await saveToLocal(certId, cert, true)
+    }
+  }
+
   // --- Core sync logic ---
   async function syncAll(): Promise<void> {
     if (isSyncing) return
@@ -127,6 +235,10 @@ export function createSyncService(
     setState({ status: 'syncing' })
 
     try {
+      // Phase 1: Upload queued photos (replaces temp keys in cert data)
+      await processPhotoQueue()
+
+      // Phase 2: Sync dirty certificates
       const dirtyCerts = await getDirtyCertificates()
       setState({ pendingCount: dirtyCerts.length })
 
@@ -189,6 +301,23 @@ export function createSyncService(
         scheduleRetry()
       }
     } catch (err) {
+      // Auth/rate-limit from photo queue processing
+      if (err instanceof ApiAuthError) {
+        setState({ status: 'auth-required', lastError: 'Sign in to sync' })
+        isSyncing = false
+        return
+      }
+      if (err instanceof ApiRateLimitError) {
+        rateLimitPauseUntil = Date.now() + (err.retryAfterSeconds * 1000)
+        setState({
+          status: 'error',
+          lastError: `Rate limited — retrying in ${err.retryAfterSeconds}s`,
+        })
+        scheduleRetry(err.retryAfterSeconds * 1000)
+        isSyncing = false
+        return
+      }
+
       const message = err instanceof Error ? err.message : 'Sync failed'
       setState({ status: 'error', lastError: message })
       scheduleRetry()
@@ -216,7 +345,6 @@ export function createSyncService(
 
   /**
    * EICR sync — uses /sync endpoint for boards, circuits, observations.
-   * This is the existing v2 behaviour, unchanged.
    */
   async function syncEicrCert(stored: StoredCertificate): Promise<void> {
     const cert = stored.data
@@ -225,33 +353,15 @@ export function createSyncService(
 
   /**
    * Minor Works sync — MW certs store everything in typeData.
-   * No boards/circuits/observations to sync via /sync endpoint.
-   *
-   * Flow:
-   *   1. If cert has serverCertId → updateCertificate with typeData
-   *   2. If no serverCertId → createCertificate, then store returned ID
-   *
-   * MW certs in IndexedDB have this shape (from MinorWorksCertificate type):
-   *   - clientDetails: { clientName, clientAddress }
-   *   - description: { descriptionOfWork, dateOfCompletion, ... }
-   *   - installation: { earthingSystem, ... }
-   *   - circuit: { description, dbRef, ... }
-   *   - testResults: { r1PlusR2, ... }
-   *   - declaration: { contractorName, ... }
-   *   - nextInspection: { recommendedDate, ... }
-   *   - partPRequired, schemeNotification
    */
   async function syncMinorWorksCert(stored: StoredCertificate): Promise<void> {
     const raw = stored.data as unknown as Record<string, unknown>
-    // certId is the local IndexedDB ID (stored.id), serverCertId is the API ID
     const serverCertId = raw.serverCertId as string | undefined
 
-    // Extract client details for top-level columns
     const clientDetails = raw.clientDetails as Record<string, string> | undefined
     const clientName = clientDetails?.clientName ?? null
     const clientAddress = clientDetails?.clientAddress ?? null
 
-    // Pack all MW-specific sections into typeData
     const typeData: Record<string, unknown> = {}
     const mwSections = [
       'description', 'installation', 'circuit', 'testResults',
@@ -263,20 +373,17 @@ export function createSyncService(
       }
     }
 
-    // Also include clientDetails in typeData for MW PDF generation on server
     if (clientDetails) {
       typeData.clientDetails = clientDetails
     }
 
     if (serverCertId) {
-      // Already exists on server — update with latest typeData
       await updateCertificate(getToken, serverCertId, {
         clientName,
         clientAddress,
         typeData,
       })
     } else {
-      // New MW cert — create on server
       const result = await createCertificate(getToken, {
         certificateType: 'MINOR_WORKS',
         clientName: clientName ?? undefined,
@@ -285,15 +392,10 @@ export function createSyncService(
         typeData,
       })
 
-      // Store the server-assigned ID back to IndexedDB so future
-      // syncs use updateCertificate instead of createCertificate.
-      // This is done via a lightweight IndexedDB update.
       try {
         const { updateCertificateField } = await import('./offlineStore')
         await updateCertificateField(stored.id, 'serverCertId', result.id)
       } catch {
-        // Non-critical — next sync will create a duplicate,
-        // but server deduplication by report_number handles it
         console.warn('[SyncService] Could not store serverCertId back to IndexedDB')
       }
     }
@@ -301,7 +403,6 @@ export function createSyncService(
 
   // --- Retry with backoff ---
   function scheduleRetry(delayMs?: number): void {
-    // Clear any pending retry
     if (retryTimeoutId) {
       clearTimeout(retryTimeoutId)
       retryTimeoutId = null
