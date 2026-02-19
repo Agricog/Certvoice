@@ -351,7 +351,7 @@ export default function NewInspection() {
       }
 
       trackCertificateCreated('EIC')
-      navigate(`/eic/${id}`, { state: { clientDetails: clientDetailsClean } })
+      navigate(`/eic/${id}`, { state: { certificate: { id, certificateType: 'EIC', clientDetails: clientDetailsClean } } })
     } catch (error) {
       captureError(error, 'NewInspection.handleCreateEIC')
     }
