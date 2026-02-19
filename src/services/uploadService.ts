@@ -7,6 +7,10 @@
  *
  * Also handles download (serves binary) and delete.
  *
+ * Auth: All functions accept a `getToken` callback, injected from the React
+ * layer via `useApiToken`. This keeps auth in one place and avoids coupling
+ * to `window.Clerk`.
+ *
  * @module services/uploadService
  */
 
@@ -19,6 +23,8 @@ const R2_BASE_URL = import.meta.env.VITE_R2_BASE_URL ?? import.meta.env.VITE_API
 // ============================================================
 // TYPES
 // ============================================================
+
+export type GetToken = () => Promise<string | null>
 
 export type FileType = 'photo' | 'signature'
 
@@ -37,26 +43,6 @@ interface UploadUrlResponse {
 }
 
 // ============================================================
-// AUTH TOKEN
-// ============================================================
-
-interface ClerkInstance {
-  session?: {
-    getToken: () => Promise<string | null>
-  } | null
-}
-
-async function getAuthToken(): Promise<string | null> {
-  try {
-    const clerk = (window as unknown as { Clerk?: ClerkInstance }).Clerk
-    if (!clerk?.session) return null
-    return await clerk.session.getToken()
-  } catch {
-    return null
-  }
-}
-
-// ============================================================
 // UPLOAD — Two-step flow
 // ============================================================
 
@@ -66,14 +52,16 @@ async function getAuthToken(): Promise<string | null> {
  * @param file - File or Blob to upload
  * @param fileType - 'photo' or 'signature'
  * @param certificateId - UUID of the certificate (scopes the storage path)
+ * @param getToken - Auth token provider (from useApiToken hook)
  * @returns UploadResult with R2 key, or throws on failure
  */
 export async function uploadFile(
   file: File | Blob,
   fileType: FileType,
-  certificateId: string
+  certificateId: string,
+  getToken: GetToken
 ): Promise<UploadResult> {
-  const token = await getAuthToken()
+  const token = await getToken()
   if (!token) throw new Error('Not authenticated')
 
   const filename = file instanceof File
@@ -137,10 +125,11 @@ export async function uploadFile(
  * Fetches the binary through the worker and creates a blob URL.
  *
  * @param key - R2 storage key
+ * @param getToken - Auth token provider
  * @returns Object URL for the file (must be revoked when no longer needed)
  */
-export async function getFileUrl(key: string): Promise<string> {
-  const token = await getAuthToken()
+export async function getFileUrl(key: string, getToken: GetToken): Promise<string> {
+  const token = await getToken()
   if (!token) throw new Error('Not authenticated')
 
   const res = await fetch(`${R2_BASE_URL}/api/download-url`, {
@@ -168,9 +157,10 @@ export async function getFileUrl(key: string): Promise<string> {
  * Delete a file from R2.
  *
  * @param key - R2 storage key
+ * @param getToken - Auth token provider
  */
-export async function deleteFile(key: string): Promise<void> {
-  const token = await getAuthToken()
+export async function deleteFile(key: string, getToken: GetToken): Promise<void> {
+  const token = await getToken()
   if (!token) throw new Error('Not authenticated')
 
   const res = await fetch(`${R2_BASE_URL}/api/file`, {
