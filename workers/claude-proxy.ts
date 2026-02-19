@@ -326,6 +326,7 @@ Respond with ONLY valid JSON, no markdown, no explanation:
       "ocpdRating": "number in amps or null if not visible",
       "rcdType": "A|AC|B|F|S or null if not visible",
       "rcdRating": "number in mA or null if not visible",
+      "cableSize": "string — e.g. '2.5mm T&E', '6mm T&E', or null if not visible",
       "confidence": "high|medium|low"
     }
   ]
