@@ -328,7 +328,7 @@ export default function MinorWorksCapture() {
             return;
           }
 
-          const { text: transcript } = await transcribeRes.json();
+          const { transcript } = await transcribeRes.json();
           if (!transcript || transcript.trim().length < 5) {
             setVoiceTranscript('No speech detected — try again');
             return;
