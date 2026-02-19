@@ -168,15 +168,15 @@ export default function EICDeclarationForm({
     hasAutoFilled.current = true
 
     const shared = {
-      name: engineerProfile.fullName,
-      companyName: engineerProfile.companyName,
-      companyAddress: engineerProfile.companyAddress,
-      position: engineerProfile.position,
-      registrationNumber: engineerProfile.registrationNumber,
+      name: engineerProfile.fullName ?? '',
+      companyName: engineerProfile.companyName ?? '',
+      companyAddress: engineerProfile.companyAddress ?? '',
+      position: engineerProfile.position ?? '',
+      registrationNumber: engineerProfile.registrationNumber ?? '',
       schemeBody: (engineerProfile.schemeBody as SchemeBody) || null,
     }
 
-    const today = new Date().toISOString().split('T')[0]
+    const today = new Date().toISOString().split('T')[0]!
 
     onDeclarationsChange({
       ...declarations,
@@ -232,7 +232,7 @@ export default function EICDeclarationForm({
     (role: RoleKey, field: string, value: unknown) => {
       const updated = { ...declarations }
       const roleData = { ...updated[role], [field]: value }
-      updated[role] = roleData as typeof updated[typeof role]
+      ;(updated as Record<string, unknown>)[role] = roleData
 
       // If same person mode and updating a copyable field on designer, propagate
       if (updated.samePersonAllRoles && role === 'designer' && (COPYABLE_FIELDS as readonly string[]).includes(field)) {
@@ -250,15 +250,15 @@ export default function EICDeclarationForm({
     if (!engineerProfile) return
 
     const shared = {
-      name: engineerProfile.fullName,
-      companyName: engineerProfile.companyName,
-      companyAddress: engineerProfile.companyAddress,
-      position: engineerProfile.position,
-      registrationNumber: engineerProfile.registrationNumber,
+      name: engineerProfile.fullName ?? '',
+      companyName: engineerProfile.companyName ?? '',
+      companyAddress: engineerProfile.companyAddress ?? '',
+      position: engineerProfile.position ?? '',
+      registrationNumber: engineerProfile.registrationNumber ?? '',
       schemeBody: (engineerProfile.schemeBody as SchemeBody) || null,
     }
 
-    const today = new Date().toISOString().split('T')[0]
+    const today = new Date().toISOString().split('T')[0]!
 
     onDeclarationsChange({
       ...declarations,
