@@ -8,6 +8,7 @@
  *   - certificateId: UUID of the certificate
  *   - signatureKey: current R2 key (null if not signed)
  *   - onSignatureChange: callback when key changes
+ *   - getToken: auth token provider (from useApiToken hook)
  *   - label: display label (e.g. "Inspector Signature")
  *   - disabled: disable drawing
  *
@@ -15,7 +16,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { uploadFile, getFileUrl, deleteFile } from '../services/uploadService'
+import { uploadFile, getFileUrl, deleteFile, type GetToken } from '../services/uploadService'
 
 // ============================================================
 // TYPES
@@ -25,6 +26,7 @@ interface SignatureCaptureProps {
   certificateId: string
   signatureKey: string | null
   onSignatureChange: (key: string | null) => void
+  getToken: GetToken
   label?: string
   disabled?: boolean
 }
@@ -39,6 +41,7 @@ export default function SignatureCapture({
   certificateId,
   signatureKey,
   onSignatureChange,
+  getToken,
   label = 'Signature',
   disabled = false,
 }: SignatureCaptureProps) {
@@ -54,7 +57,7 @@ export default function SignatureCapture({
   useEffect(() => {
     if (signatureKey && !previewUrl) {
       setState('saved')
-      getFileUrl(signatureKey)
+      getFileUrl(signatureKey, getToken)
         .then((url) => setPreviewUrl(url))
         .catch(() => {})
     }
@@ -175,7 +178,7 @@ export default function SignatureCapture({
       })
 
       // Upload
-      const result = await uploadFile(blob, 'signature', certificateId)
+      const result = await uploadFile(blob, 'signature', certificateId, getToken)
 
       // Set preview from canvas data (avoids extra download)
       const dataUrl = canvas.toDataURL('image/png')
@@ -188,12 +191,12 @@ export default function SignatureCapture({
       setError(message)
       setState('drawing')
     }
-  }, [certificateId, hasStrokes, onSignatureChange])
+  }, [certificateId, hasStrokes, onSignatureChange, getToken])
 
   const handleClear = useCallback(async () => {
     // Delete from R2 if saved
     if (signatureKey) {
-      deleteFile(signatureKey).catch(() => {})
+      deleteFile(signatureKey, getToken).catch(() => {})
     }
 
     // Clean up preview
@@ -204,7 +207,7 @@ export default function SignatureCapture({
 
     onSignatureChange(null)
     clearCanvas()
-  }, [signatureKey, previewUrl, onSignatureChange, clearCanvas])
+  }, [signatureKey, previewUrl, onSignatureChange, clearCanvas, getToken])
 
   // ---- Render ----
 
