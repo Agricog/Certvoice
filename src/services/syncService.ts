@@ -1,8 +1,13 @@
 /**
- * CertVoice — Sync Service (v2)
+ * CertVoice — Sync Service (v3)
  *
  * Background sync engine — watches connectivity and pushes dirty
  * certificates to the API when online.
+ *
+ * v3 changes:
+ *   - Multi-cert-type: handles EICR (sync endpoint) and MW (create+update)
+ *   - MW certs use createCertificate + updateCertificate with typeData
+ *   - EICR certs continue using /sync endpoint for boards/circuits/observations
  *
  * v2 changes:
  *   - Auth-aware: pauses sync on ApiAuthError (no token / expired session)
@@ -14,11 +19,12 @@
  *   1. Every certificate change saves to IndexedDB immediately (instant)
  *   2. Certificate is marked dirty with lastModified timestamp
  *   3. When online + authenticated, sync service picks up dirty certs
- *   4. Calls /sync endpoint with lastModified for conflict detection
- *   5. On success: marks certificate clean
- *   6. On auth failure: pauses sync, sets status to 'auth-required'
- *   7. On rate limit: backs off for Retry-After seconds
- *   8. On other failure: exponential backoff (max 3 retries per cert)
+ *   4. EICR: calls /sync endpoint with boards/circuits/observations
+ *   5. MW: calls createCertificate (if new) or updateCertificate (if exists)
+ *   6. On success: marks certificate clean
+ *   7. On auth failure: pauses sync, sets status to 'auth-required'
+ *   8. On rate limit: backs off for Retry-After seconds
+ *   9. On other failure: exponential backoff (max 3 retries per cert)
  *
  * @module services/syncService
  */
@@ -30,7 +36,13 @@ import {
   onConnectivityChange,
 } from './offlineStore'
 import type { StoredCertificate } from './offlineStore'
-import { syncCertificate, ApiAuthError, ApiRateLimitError } from './certificateApi'
+import {
+  syncCertificate,
+  createCertificate,
+  updateCertificate,
+  ApiAuthError,
+  ApiRateLimitError,
+} from './certificateApi'
 
 // ============================================================
 // TYPES
@@ -189,9 +201,102 @@ export function createSyncService(
     const cert = stored.data
     if (!cert.id) throw new Error('Certificate has no ID')
 
-    // Send lastModified for conflict detection (last-write-wins on server)
-    await syncCertificate(getToken, cert.id, cert, stored.lastModified)
+    // Detect certificate type from stored data
+    const raw = cert as unknown as Record<string, unknown>
+    const certType = (raw.certificateType as string) ?? 'EICR'
+
+    if (certType === 'MINOR_WORKS') {
+      await syncMinorWorksCert(stored)
+    } else {
+      await syncEicrCert(stored)
+    }
+
     await markSynced(stored.id)
+  }
+
+  /**
+   * EICR sync — uses /sync endpoint for boards, circuits, observations.
+   * This is the existing v2 behaviour, unchanged.
+   */
+  async function syncEicrCert(stored: StoredCertificate): Promise<void> {
+    const cert = stored.data
+    await syncCertificate(getToken, cert.id!, cert, stored.lastModified)
+  }
+
+  /**
+   * Minor Works sync — MW certs store everything in typeData.
+   * No boards/circuits/observations to sync via /sync endpoint.
+   *
+   * Flow:
+   *   1. If cert has serverCertId → updateCertificate with typeData
+   *   2. If no serverCertId → createCertificate, then store returned ID
+   *
+   * MW certs in IndexedDB have this shape (from MinorWorksCertificate type):
+   *   - clientDetails: { clientName, clientAddress }
+   *   - description: { descriptionOfWork, dateOfCompletion, ... }
+   *   - installation: { earthingSystem, ... }
+   *   - circuit: { description, dbRef, ... }
+   *   - testResults: { r1PlusR2, ... }
+   *   - declaration: { contractorName, ... }
+   *   - nextInspection: { recommendedDate, ... }
+   *   - partPRequired, schemeNotification
+   */
+  async function syncMinorWorksCert(stored: StoredCertificate): Promise<void> {
+    const raw = stored.data as unknown as Record<string, unknown>
+    const certId = raw.id as string
+    const serverCertId = raw.serverCertId as string | undefined
+
+    // Extract client details for top-level columns
+    const clientDetails = raw.clientDetails as Record<string, string> | undefined
+    const clientName = clientDetails?.clientName ?? null
+    const clientAddress = clientDetails?.clientAddress ?? null
+
+    // Pack all MW-specific sections into typeData
+    const typeData: Record<string, unknown> = {}
+    const mwSections = [
+      'description', 'installation', 'circuit', 'testResults',
+      'declaration', 'nextInspection', 'partPRequired', 'schemeNotification',
+    ]
+    for (const key of mwSections) {
+      if (raw[key] !== undefined) {
+        typeData[key] = raw[key]
+      }
+    }
+
+    // Also include clientDetails in typeData for MW PDF generation on server
+    if (clientDetails) {
+      typeData.clientDetails = clientDetails
+    }
+
+    if (serverCertId) {
+      // Already exists on server — update with latest typeData
+      await updateCertificate(getToken, serverCertId, {
+        clientName,
+        clientAddress,
+        typeData,
+      })
+    } else {
+      // New MW cert — create on server
+      const result = await createCertificate(getToken, {
+        certificateType: 'MINOR_WORKS',
+        clientName,
+        clientAddress,
+        installationAddress: clientAddress,
+        typeData,
+      })
+
+      // Store the server-assigned ID back to IndexedDB so future
+      // syncs use updateCertificate instead of createCertificate.
+      // This is done via a lightweight IndexedDB update.
+      try {
+        const { updateCertificateField } = await import('./offlineStore')
+        await updateCertificateField(stored.id, 'serverCertId', result.id)
+      } catch {
+        // Non-critical — next sync will create a duplicate,
+        // but server deduplication by report_number handles it
+        console.warn('[SyncService] Could not store serverCertId back to IndexedDB')
+      }
+    }
   }
 
   // --- Retry with backoff ---
