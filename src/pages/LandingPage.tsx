@@ -90,6 +90,10 @@ const softwareAppSchema = {
     'BS 7671 compliant PDF generation',
     'Offline-capable PWA',
     'Registration body details auto-populated',
+    'Minor Works certificates with voice capture',
+    'EIC (Electrical Installation Certificate) with 3 signatories',
+    'Board camera scanning with AI MCB detection',
+    'AI observation polishing with BS 7671 classification',
   ],
 }
 
@@ -127,6 +131,22 @@ const faqSchema = {
       acceptedAnswer: {
         '@type': 'Answer',
         text: 'CertVoice Solo costs £29.99 per month with a 14-day free trial. Team plans start at £24.99 per seat/month, and Business plans at £19.99 per seat/month. No contracts, cancel any time.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'What certificate types does CertVoice support?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'CertVoice supports three BS 7671 certificate types: EICR (Electrical Installation Condition Report) for periodic inspections and landlord checks, Minor Works certificates for small jobs like socket additions and light fittings, and EIC (Electrical Installation Certificate) for new installations, rewires, and consumer unit replacements. All three support voice capture.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'Can CertVoice scan my consumer unit?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Yes. CertVoice includes board camera scanning — photograph the inside of a distribution board and AI vision identifies the MCB types, ratings, and circuit positions, pre-populating your circuit schedule for review.',
       },
     },
   ],
@@ -335,6 +355,10 @@ export default function LandingPage() {
         />
         <meta property="og:site_name" content="CertVoice" />
         <meta property="og:locale" content="en_GB" />
+        <meta property="og:image" content="https://certvoice.co.uk/og-image.png" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta property="og:image:alt" content="CertVoice — Complete EICR certificates by voice. Voice-first electrical certificate app for UK electricians." />
 
         {/* Twitter Card */}
         <meta name="twitter:card" content="summary_large_image" />
@@ -346,6 +370,8 @@ export default function LandingPage() {
           name="twitter:description"
           content="Speak your inspection findings. AI builds BS 7671-compliant EICR certificates. Save 1-3 hours per inspection."
         />
+        <meta name="twitter:image" content="https://certvoice.co.uk/og-image.png" />
+        <meta name="twitter:image:alt" content="CertVoice — Complete EICR certificates by voice" />
 
         {/* JSON-LD */}
         <script type="application/ld+json">
@@ -643,8 +669,53 @@ export default function LandingPage() {
             </div>
           </section>
 
-          {/* ============ COMPLIANCE / TRUST ============ */}
+          {/* ============ CERTIFICATE TYPES ============ */}
           <section>
+            <div className="max-w-5xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
+              <div className="text-center mb-12">
+                <h2 className="text-2xl sm:text-3xl font-bold text-certvoice-text mb-4">
+                  Three certificate types. One app.
+                </h2>
+                <p className="text-sm text-certvoice-muted max-w-lg mx-auto">
+                  EICR, Minor Works, and EIC — all with voice capture, AI extraction,
+                  and BS 7671-compliant PDF generation. No switching between apps.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-3xl mx-auto">
+                <div className="cv-panel text-center">
+                  <FileText className="w-8 h-8 text-certvoice-accent mx-auto mb-3" />
+                  <p className="text-sm font-semibold text-certvoice-text mb-1">
+                    EICR
+                  </p>
+                  <p className="text-xs text-certvoice-muted">
+                    Periodic inspections, landlord checks, 5-yearly surveys. 97-item inspection schedule included.
+                  </p>
+                </div>
+                <div className="cv-panel text-center">
+                  <Zap className="w-8 h-8 text-certvoice-amber mx-auto mb-3" />
+                  <p className="text-sm font-semibold text-certvoice-text mb-1">
+                    Minor Works
+                  </p>
+                  <p className="text-xs text-certvoice-muted">
+                    Socket additions, light fittings, small jobs. Capture circuit details and test results in one voice note.
+                  </p>
+                </div>
+                <div className="cv-panel text-center">
+                  <Award className="w-8 h-8 text-certvoice-green mx-auto mb-3" />
+                  <p className="text-sm font-semibold text-certvoice-text mb-1">
+                    EIC
+                  </p>
+                  <p className="text-xs text-certvoice-muted">
+                    New installations, rewires, consumer unit replacements. Three signatories with Part P notification tracking.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* ============ COMPLIANCE / TRUST ============ */}
+          <section className="bg-certvoice-surface/50 border-y border-certvoice-border">
             <div className="max-w-5xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
               <div className="text-center mb-10">
                 <h2 className="text-2xl sm:text-3xl font-bold text-certvoice-text mb-4">
