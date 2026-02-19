@@ -498,7 +498,9 @@ export default function EICCapture() {
     setCertData((prev) => {
       const existing = [...((prev.distributionBoards as DistributionBoardHeader[]) ?? [])]
       if (editingBoardIndex !== null && editingBoardIndex < existing.length) {
-        const oldRef = existing[editingBoardIndex].dbReference
+        const board = existing[editingBoardIndex]
+        if (!board) return prev
+        const oldRef = board.dbReference
         existing[editingBoardIndex] = updated
         if (oldRef !== updated.dbReference) {
           const updatedCircuits = ((prev.circuits as CircuitDetail[]) ?? []).map((c) =>
