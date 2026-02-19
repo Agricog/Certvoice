@@ -6,6 +6,11 @@
  *   2. Receives voice transcripts from the frontend
  *   3. Sends them to Claude API (Sonnet) with a trade terminology system prompt
  *   4. Returns structured circuit/observation/supply data
+ *   5. Polishes rough observation wording into BS 7671 compliant text
+ *
+ * Routes:
+ *   POST /api/extract              — Voice transcript → structured JSON
+ *   POST /api/polish-observation   — Raw observation → professional wording
  *
  * Security:
  *   - Clerk JWT verified on every request
@@ -59,6 +64,14 @@ interface ExtractionRequest {
   earthingType: string | null
 }
 
+interface PolishRequest {
+  rawText: string
+  classificationCode: string
+  location: string
+  circuitReference: string
+  dbReference: string
+}
+
 interface ClaudeMessage {
   role: 'user' | 'assistant'
   content: string
@@ -81,7 +94,7 @@ interface StructuredLog {
 }
 
 // ============================================================
-// SYSTEM PROMPT — THE CORE IP OF CERTVOICE
+// SYSTEM PROMPT — VOICE EXTRACTION
 // ============================================================
 
 const SYSTEM_PROMPT = `You are CertVoice AI, a specialist in UK electrical inspection terminology. Your job is to extract structured data from an electrician's spoken inspection notes.
@@ -199,6 +212,58 @@ The transcript has been preprocessed but may still contain:
 - "CU" or "DB" = consumer unit / distribution board
 - "ring final" = ring circuit (has r1, rn, r2 readings)
 - "radial" = radial circuit (has R1+R2 only)`
+
+// ============================================================
+// POLISH OBSERVATION PROMPT
+// ============================================================
+
+const POLISH_OBSERVATION_PROMPT = `You are CertVoice AI, a specialist in UK electrical inspection report writing. Your job is to take an electrician's rough observation and rewrite it as professional BS 7671:2018+A2:2022 compliant wording suitable for an EICR.
+
+## TASK
+Given a raw observation, classification code, and context, return:
+1. Polished observation text — formal, concise, third-person, no abbreviations
+2. The most relevant BS 7671 regulation reference
+3. A clear remedial action
+
+## TONE
+- Formal but concise — as a senior electrical assessor would write
+- Third person, past tense ("found", "observed", "noted")
+- No abbreviations in the polished text (write "socket-outlet" not "socket")
+- Classification-aware: C1 wording conveys urgency, C3 is advisory
+
+## EXAMPLES
+
+Raw: "socket loose, wires showing"
+Classification: C2
+Polished: "Socket-outlet at kitchen worktop found with insecure fixings and exposed live conductors accessible to touch."
+Regulation: "Regulation 526.3"
+Remedial: "Isolate circuit, re-terminate connections and secure socket-outlet to mounting box."
+
+Raw: "no RCD on sockets, old board"
+Classification: C2
+Polished: "Final circuits serving socket-outlets lack 30mA RCD protection as required for additional protection."
+Regulation: "Regulation 411.3.3"
+Remedial: "Install RCD protection to all socket-outlet circuits or replace distribution board with RCBO-equipped unit."
+
+Raw: "downlights in bathroom not IP rated, wrong zones"
+Classification: C2
+Polished: "Luminaires installed within Zone 1 of the bathroom do not have an appropriate IP rating for the zone in which they are installed."
+Regulation: "Regulation 701.512.2"
+Remedial: "Replace luminaires with fittings rated to minimum IPX4 as required for Zone 1."
+
+Raw: "old cable colours, no conversion labels"
+Classification: C3
+Polished: "Installation retains pre-harmonised cable colours without appropriate conversion labelling at the distribution board."
+Regulation: "Regulation 514.14.1"
+Remedial: "Apply appropriate warning labels at distribution board indicating the presence of two wiring colour systems."
+
+## RESPONSE FORMAT
+Respond with ONLY valid JSON, no markdown, no explanation:
+{
+  "polishedText": "string",
+  "regulationReference": "string — e.g. Regulation 411.3.3",
+  "remedialAction": "string"
+}`
 
 // ============================================================
 // GUARD HELPERS
@@ -346,7 +411,22 @@ function buildUserMessage(body: ExtractionRequest): string {
   return message
 }
 
-async function callClaude(apiKey: string, userMessage: string): Promise<string> {
+function buildPolishMessage(body: PolishRequest): string {
+  let message = `Polish this observation:\n\n"${body.rawText}"\n\n`
+  message += `Classification: ${body.classificationCode}\n`
+  if (body.location) message += `Location: ${body.location}\n`
+  if (body.circuitReference) message += `Circuit: ${body.circuitReference}\n`
+  if (body.dbReference) message += `Distribution board: ${body.dbReference}\n`
+  message += `\nRespond with ONLY valid JSON.`
+  return message
+}
+
+async function callClaude(
+  apiKey: string,
+  userMessage: string,
+  systemPrompt: string,
+  maxTokens: number
+): Promise<string> {
   const messages: ClaudeMessage[] = [
     { role: 'user', content: userMessage },
   ]
@@ -360,8 +440,8 @@ async function callClaude(apiKey: string, userMessage: string): Promise<string> 
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 2048,
-      system: SYSTEM_PROMPT,
+      max_tokens: maxTokens,
+      system: systemPrompt,
       messages,
     }),
   })
@@ -409,6 +489,226 @@ function parseClaudeResponse(text: string): Record<string, unknown> {
 }
 
 // ============================================================
+// SHARED GUARD — Auth + Rate Limit (runs before every route)
+// ============================================================
+
+interface GuardResult {
+  userId: string
+  errorResponse?: never
+}
+
+interface GuardError {
+  userId: null
+  errorResponse: Response
+}
+
+async function runGuards(
+  request: Request,
+  env: Env,
+  cors: Record<string, string>,
+  requestId: string,
+  route: string,
+  startTime: number
+): Promise<GuardResult | GuardError> {
+  // READ_ONLY_MODE safety switch
+  if (env.READ_ONLY_MODE === 'true') {
+    structuredLog({
+      requestId, route, method: request.method,
+      status: 503, latencyMs: Date.now() - startTime, userId: null,
+      message: 'Read-only mode active — request blocked',
+    })
+    return {
+      userId: null,
+      errorResponse: new Response(
+        JSON.stringify({ success: false, error: 'Service temporarily unavailable', code: 'READ_ONLY', requestId }),
+        { status: 503, headers: { ...cors, 'Content-Type': 'application/json' } }
+      ),
+    }
+  }
+
+  // Authenticate via Clerk JWT
+  const userId = await verifyClerkJWT(
+    request.headers.get('Authorization'),
+    env.CLERK_JWKS_URL
+  )
+
+  if (!userId) {
+    structuredLog({
+      requestId, route, method: request.method,
+      status: 401, latencyMs: Date.now() - startTime, userId: null,
+      message: 'JWT verification failed',
+    })
+    return {
+      userId: null,
+      errorResponse: new Response(
+        JSON.stringify({ success: false, error: 'Unauthorized', requestId }),
+        { status: 401, headers: { ...cors, 'Content-Type': 'application/json' } }
+      ),
+    }
+  }
+
+  // Rate limit via Upstash
+  try {
+    const limiter = createRateLimiter(env)
+    const { success } = await limiter.limit(userId)
+    if (!success) {
+      structuredLog({
+        requestId, route, method: request.method,
+        status: 429, latencyMs: Date.now() - startTime, userId,
+        message: 'Rate limited',
+      })
+      return {
+        userId: null,
+        errorResponse: new Response(
+          JSON.stringify({
+            success: false,
+            error: 'Rate limited. Please wait before trying again.',
+            code: 'RATE_LIMITED',
+            retryAfter: 60,
+            requestId,
+          }),
+          { status: 429, headers: { ...cors, 'Content-Type': 'application/json' } }
+        ),
+      }
+    }
+  } catch {
+    // Rate limiter failure should not block the request
+  }
+
+  return { userId }
+}
+
+// ============================================================
+// ROUTE HANDLERS
+// ============================================================
+
+async function handleExtract(
+  request: Request,
+  env: Env,
+  cors: Record<string, string>,
+  requestId: string,
+  userId: string,
+  startTime: number
+): Promise<Response> {
+  const route = '/api/extract'
+
+  try {
+    const body = (await request.json()) as ExtractionRequest
+
+    if (!body.transcript || body.transcript.trim().length < 5) {
+      structuredLog({
+        requestId, route, method: 'POST',
+        status: 400, latencyMs: Date.now() - startTime, userId,
+        message: 'Transcript too short',
+      })
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: 'Transcript too short',
+          code: 'INVALID_INPUT',
+          requestId,
+        }),
+        { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    const userMessage = buildUserMessage(body)
+    const claudeResponse = await callClaude(env.ANTHROPIC_API_KEY, userMessage, SYSTEM_PROMPT, 2048)
+    const extractedData = parseClaudeResponse(claudeResponse)
+
+    structuredLog({
+      requestId, route, method: 'POST',
+      status: 200, latencyMs: Date.now() - startTime, userId,
+      message: `Extraction complete — type: ${extractedData.type ?? 'unknown'}`,
+    })
+
+    return new Response(JSON.stringify({ ...extractedData, requestId }), {
+      status: 200,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Internal error'
+    structuredLog({
+      requestId, route, method: 'POST',
+      status: 500, latencyMs: Date.now() - startTime, userId,
+      error: message,
+    })
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: 'Extraction failed',
+        code: 'API_ERROR',
+        requestId,
+      }),
+      { status: 500, headers: { ...cors, 'Content-Type': 'application/json' } }
+    )
+  }
+}
+
+async function handlePolishObservation(
+  request: Request,
+  env: Env,
+  cors: Record<string, string>,
+  requestId: string,
+  userId: string,
+  startTime: number
+): Promise<Response> {
+  const route = '/api/polish-observation'
+
+  try {
+    const body = (await request.json()) as PolishRequest
+
+    if (!body.rawText || body.rawText.trim().length < 3) {
+      structuredLog({
+        requestId, route, method: 'POST',
+        status: 400, latencyMs: Date.now() - startTime, userId,
+        message: 'Observation text too short',
+      })
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: 'Observation text too short',
+          code: 'INVALID_INPUT',
+          requestId,
+        }),
+        { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    const userMessage = buildPolishMessage(body)
+    const claudeResponse = await callClaude(env.ANTHROPIC_API_KEY, userMessage, POLISH_OBSERVATION_PROMPT, 1024)
+    const polishedData = parseClaudeResponse(claudeResponse)
+
+    structuredLog({
+      requestId, route, method: 'POST',
+      status: 200, latencyMs: Date.now() - startTime, userId,
+      message: 'Observation polished successfully',
+    })
+
+    return new Response(JSON.stringify({ ...polishedData, requestId }), {
+      status: 200,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Internal error'
+    structuredLog({
+      requestId, route, method: 'POST',
+      status: 500, latencyMs: Date.now() - startTime, userId,
+      error: message,
+    })
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: 'Polish failed',
+        code: 'API_ERROR',
+        requestId,
+      }),
+      { status: 500, headers: { ...cors, 'Content-Type': 'application/json' } }
+    )
+  }
+}
+
+// ============================================================
 // WORKER ENTRY
 // ============================================================
 
@@ -419,142 +719,58 @@ export default {
     const url = new URL(request.url)
     const origin = request.headers.get('Origin') ?? ''
     const cors = corsHeaders(origin, env.ALLOWED_ORIGIN ?? 'https://certvoice.co.uk')
-    let userId: string | null = null
-    let status = 200
 
     // CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: cors })
     }
 
-    // Only handle POST /api/extract
-    if (url.pathname !== '/api/extract' || request.method !== 'POST') {
-      status = 404
+    // Only POST allowed
+    if (request.method !== 'POST') {
       structuredLog({
         requestId, route: url.pathname, method: request.method,
-        status, latencyMs: Date.now() - startTime, userId: null,
+        status: 404, latencyMs: Date.now() - startTime, userId: null,
         message: 'Route not found',
       })
       return new Response(
         JSON.stringify({ success: false, error: 'Not found', requestId }),
-        { status, headers: { ...cors, 'Content-Type': 'application/json' } }
+        { status: 404, headers: { ...cors, 'Content-Type': 'application/json' } }
       )
     }
 
-    // READ_ONLY_MODE safety switch
-    if (env.READ_ONLY_MODE === 'true') {
-      status = 503
+    // Check route exists before running guards
+    const validRoutes = ['/api/extract', '/api/polish-observation']
+    if (!validRoutes.includes(url.pathname)) {
       structuredLog({
         requestId, route: url.pathname, method: request.method,
-        status, latencyMs: Date.now() - startTime, userId: null,
-        message: 'Read-only mode active — extraction blocked',
+        status: 404, latencyMs: Date.now() - startTime, userId: null,
+        message: 'Route not found',
       })
       return new Response(
-        JSON.stringify({ success: false, error: 'Service temporarily unavailable', code: 'READ_ONLY', requestId }),
-        { status, headers: { ...cors, 'Content-Type': 'application/json' } }
+        JSON.stringify({ success: false, error: 'Not found', requestId }),
+        { status: 404, headers: { ...cors, 'Content-Type': 'application/json' } }
       )
     }
 
-    // Authenticate via Clerk JWT
-    userId = await verifyClerkJWT(
-      request.headers.get('Authorization'),
-      env.CLERK_JWKS_URL
+    // Run shared guards (read-only check, auth, rate limit)
+    const guard = await runGuards(request, env, cors, requestId, url.pathname, startTime)
+    if (guard.errorResponse) {
+      return guard.errorResponse
+    }
+
+    // Route to handler
+    if (url.pathname === '/api/extract') {
+      return handleExtract(request, env, cors, requestId, guard.userId, startTime)
+    }
+
+    if (url.pathname === '/api/polish-observation') {
+      return handlePolishObservation(request, env, cors, requestId, guard.userId, startTime)
+    }
+
+    // Should never reach here due to validRoutes check above
+    return new Response(
+      JSON.stringify({ success: false, error: 'Not found', requestId }),
+      { status: 404, headers: { ...cors, 'Content-Type': 'application/json' } }
     )
-
-    if (!userId) {
-      status = 401
-      structuredLog({
-        requestId, route: url.pathname, method: request.method,
-        status, latencyMs: Date.now() - startTime, userId: null,
-        message: 'JWT verification failed',
-      })
-      return new Response(
-        JSON.stringify({ success: false, error: 'Unauthorized', requestId }),
-        { status, headers: { ...cors, 'Content-Type': 'application/json' } }
-      )
-    }
-
-    // Rate limit via Upstash
-    try {
-      const limiter = createRateLimiter(env)
-      const { success } = await limiter.limit(userId)
-      if (!success) {
-        status = 429
-        structuredLog({
-          requestId, route: url.pathname, method: request.method,
-          status, latencyMs: Date.now() - startTime, userId,
-          message: 'Rate limited',
-        })
-        return new Response(
-          JSON.stringify({
-            success: false,
-            error: 'Rate limited. Please wait before trying again.',
-            code: 'RATE_LIMITED',
-            retryAfter: 60,
-            requestId,
-          }),
-          { status, headers: { ...cors, 'Content-Type': 'application/json' } }
-        )
-      }
-    } catch {
-      // Rate limiter failure should not block the request
-    }
-
-    // Parse and validate request body
-    try {
-      const body = (await request.json()) as ExtractionRequest
-
-      if (!body.transcript || body.transcript.trim().length < 5) {
-        status = 400
-        structuredLog({
-          requestId, route: url.pathname, method: request.method,
-          status, latencyMs: Date.now() - startTime, userId,
-          message: 'Transcript too short',
-        })
-        return new Response(
-          JSON.stringify({
-            success: false,
-            error: 'Transcript too short',
-            code: 'INVALID_INPUT',
-            requestId,
-          }),
-          { status, headers: { ...cors, 'Content-Type': 'application/json' } }
-        )
-      }
-
-      // Build user message and call Claude
-      const userMessage = buildUserMessage(body)
-      const claudeResponse = await callClaude(env.ANTHROPIC_API_KEY, userMessage)
-      const extractedData = parseClaudeResponse(claudeResponse)
-
-      status = 200
-      structuredLog({
-        requestId, route: url.pathname, method: request.method,
-        status, latencyMs: Date.now() - startTime, userId,
-        message: `Extraction complete — type: ${extractedData.type ?? 'unknown'}`,
-      })
-
-      return new Response(JSON.stringify({ ...extractedData, requestId }), {
-        status,
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Internal error'
-      status = 500
-      structuredLog({
-        requestId, route: url.pathname, method: request.method,
-        status, latencyMs: Date.now() - startTime, userId,
-        error: message,
-      })
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: 'Extraction failed',
-          code: 'API_ERROR',
-          requestId,
-        }),
-        { status, headers: { ...cors, 'Content-Type': 'application/json' } }
-      )
-    }
   },
 }
