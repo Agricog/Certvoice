@@ -174,12 +174,7 @@ function getCertLink(cert: CertificateListItem): string {
   if (cert.certificateType === 'EIC') {
     return `/eic/${cert.id}`
   }
-  switch (cert.status) {
-    case 'DRAFT':
-      return '/new'
-    default:
-      return `/inspect/${cert.id}`
-  }
+  return `/inspect/${cert.id}`
 }
 
 // ============================================================
