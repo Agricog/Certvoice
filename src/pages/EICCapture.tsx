@@ -42,7 +42,6 @@ import {
   Ruler,
 } from 'lucide-react'
 import type {
-  EICCertificate,
   EICClientDetails,
   EICInstallationDetails,
   ExtentOfWork,
@@ -60,7 +59,6 @@ import type {
   InspectionItem,
   InspectionOutcome,
 } from '../types/eic'
-import type { EarthingType } from '../types/eicr'
 import CircuitRecorder from '../components/CircuitRecorder'
 import SupplyDetails from '../components/SupplyDetails'
 import InspectionChecklist from '../components/InspectionChecklist'
@@ -190,8 +188,8 @@ export default function EICCapture() {
   const [editingCircuitIndex, setEditingCircuitIndex] = useState<number | null>(null)
   const [editingBoardIndex, setEditingBoardIndex] = useState<number | null>(null)
   const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set())
-  const [isExporting, setIsExporting] = useState(false)
-  const [pdfReady, setPdfReady] = useState<{ url: string; filename: string } | null>(null)
+  const [isExporting, _setIsExporting] = useState(false)
+  const [pdfReady, _setPdfReady] = useState<{ url: string; filename: string } | null>(null)
 
   // --- Typed accessors ---
   const certId = certData.id as string | undefined
@@ -786,7 +784,7 @@ export default function EICCapture() {
         </button>
       </div>
 
-      {recorderMode && (
+      {recorderMode && activeBoard && (
         <CircuitRecorder
           mode={recorderMode}
           locationContext={activeBoard?.dbLocation ?? ''}
