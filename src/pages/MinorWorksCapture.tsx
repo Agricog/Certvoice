@@ -398,7 +398,7 @@ export default function MinorWorksCapture() {
             }
             if (c.zs != null) {
               testPatch.earthFaultLoopImpedance = {
-                ...(cert?.testResults.earthFaultLoopImpedance ?? { zs: '' }),
+                ...(cert?.testResults.earthFaultLoopImpedance ?? { zs: '', zsValid: null }),
                 zs: String(c.zs),
               };
             }
