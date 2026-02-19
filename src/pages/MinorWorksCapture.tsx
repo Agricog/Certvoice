@@ -314,7 +314,7 @@ export default function MinorWorksCapture() {
 
           const apiBase = import.meta.env.VITE_API_BASE_URL || '';
 
-          // Step 1: Transcribe audio → text (same endpoint EICR uses)
+          // Step 1: Transcribe audio → text
           const formData = new FormData();
           formData.append('audio', audioBlob);
           const transcribeRes = await fetch(`${apiBase}/api/speech/transcribe`, {
@@ -337,8 +337,7 @@ export default function MinorWorksCapture() {
           setVoiceTranscript(`"${transcript}" — extracting...`);
 
           // Step 2: Send transcript to Claude proxy for structured extraction
-          const claudeBase = import.meta.env.VITE_CLAUDE_PROXY_URL || apiBase;
-          const extractRes = await fetch(`${claudeBase}/api/extract`, {
+          const extractRes = await fetch(`${apiBase}/api/extract`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -365,24 +364,35 @@ export default function MinorWorksCapture() {
           if (data.type === 'circuit' && data.circuit) {
             const c = data.circuit;
             const circuitPatch: Partial<MinorWorksCircuit> = {};
+            const testPatch: Partial<MinorWorksTestResults> = {};
+
+            // ── Circuit fields ──
             if (c.circuitDescription) circuitPatch.circuitDescription = c.circuitDescription;
-            if (c.ocpdType || c.ocpdRating) {
+
+            // Protective device
+            if (c.ocpdBsEn || c.ocpdType || c.ocpdRating) {
               circuitPatch.protectiveDevice = {
                 ...(cert?.circuit.protectiveDevice ?? { bs: '', type: '', rating: '' }),
+                ...(c.ocpdBsEn ? { bs: c.ocpdBsEn } : {}),
                 ...(c.ocpdType ? { type: c.ocpdType } : {}),
                 ...(c.ocpdRating ? { rating: String(c.ocpdRating) } : {}),
               };
             }
-            if (c.liveConductorCsa) {
+
+            // Wiring system — map cable type from wiring type code
+            if (c.liveConductorCsa || c.wiringType || c.referenceMethod) {
+              const cableTypeMap: Record<string, string> = {
+                A: 'T+E', B: 'SWA', F: 'SWA', H: 'MI',
+              };
               circuitPatch.wiringSystem = {
                 ...(cert?.circuit.wiringSystem ?? { cableType: '', csa: '', referenceMethod: '' }),
-                csa: String(c.liveConductorCsa),
+                ...(c.liveConductorCsa ? { csa: String(c.liveConductorCsa) } : {}),
+                ...(c.wiringType && cableTypeMap[c.wiringType] ? { cableType: cableTypeMap[c.wiringType] } : {}),
+                ...(c.referenceMethod ? { referenceMethod: c.referenceMethod } : {}),
               };
             }
-            if (Object.keys(circuitPatch).length > 0) updateCircuit(circuitPatch);
 
-            // Map test results
-            const testPatch: Partial<MinorWorksTestResults> = {};
+            // ── Test result fields ──
             if (c.r1r2 != null) {
               testPatch.earthContinuity = {
                 ...(cert?.testResults.earthContinuity ?? { r1PlusR2: '', r2: '' }),
@@ -413,7 +423,18 @@ export default function MinorWorksCapture() {
                 ...(c.rcdRating != null ? { ratedResidualCurrent: String(c.rcdRating) } : {}),
               };
             }
-            if (Object.keys(testPatch).length > 0) updateTestResults(testPatch);
+
+            // ── Apply both patches in one update to avoid stale state ──
+            if (Object.keys(circuitPatch).length > 0 || Object.keys(testPatch).length > 0) {
+              const updated = { ...cert! };
+              if (Object.keys(circuitPatch).length > 0) {
+                updated.circuit = { ...updated.circuit, ...circuitPatch };
+              }
+              if (Object.keys(testPatch).length > 0) {
+                updated.testResults = { ...updated.testResults, ...testPatch };
+              }
+              persist(updated);
+            }
           }
         } catch {
           setVoiceTranscript('Voice extraction failed — enter manually');
@@ -427,7 +448,7 @@ export default function MinorWorksCapture() {
     } catch {
       setVoiceTranscript('Microphone access denied');
     }
-  }, [getTokenSafe, updateCircuit, updateTestResults]);
+  }, [getTokenSafe, cert, persist]);
 
   const stopVoiceCapture = useCallback(() => {
     mediaRecorderRef.current?.stop();
