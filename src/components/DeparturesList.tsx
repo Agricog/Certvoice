@@ -18,7 +18,7 @@
  */
 
 import { useState, useCallback } from 'react'
-import { Plus, Trash2, AlertTriangle, FileText, ChevronDown, ChevronUp, Check, X } from 'lucide-react'
+import { Plus, Trash2, AlertTriangle, FileText, ChevronDown, ChevronUp, Check } from 'lucide-react'
 import type { Departure } from '../types/eic'
 import { sanitizeText } from '../utils/sanitization'
 
@@ -138,7 +138,6 @@ export default function DeparturesList({
 
       {/* Departure cards */}
       {departures.map((dep) => {
-        const isEditing = editingId === dep.id
         const isExpanded = expandedIds.has(dep.id)
         const complete = isComplete(dep)
 
