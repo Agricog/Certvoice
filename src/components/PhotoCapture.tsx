@@ -8,6 +8,7 @@
  *   - certificateId: UUID of the certificate
  *   - photoKeys: current R2 keys (controlled from parent)
  *   - onPhotosChange: callback when keys change (add/remove)
+ *   - getToken: auth token provider (from useApiToken hook)
  *   - maxPhotos: max photos allowed (default 4)
  *   - disabled: disable capture
  *
@@ -20,6 +21,7 @@ import {
   getFileUrl,
   deleteFile,
   compressImage,
+  type GetToken,
 } from '../services/uploadService'
 
 // ============================================================
@@ -37,6 +39,7 @@ interface PhotoCaptureProps {
   certificateId: string
   photoKeys: string[]
   onPhotosChange: (keys: string[]) => void
+  getToken: GetToken
   maxPhotos?: number
   disabled?: boolean
 }
@@ -49,6 +52,7 @@ export default function PhotoCapture({
   certificateId,
   photoKeys,
   onPhotosChange,
+  getToken,
   maxPhotos = 4,
   disabled = false,
 }: PhotoCaptureProps) {
@@ -78,7 +82,7 @@ export default function PhotoCapture({
   useEffect(() => {
     photos.forEach((photo) => {
       if (!photo.localUrl && !photo.uploading && !photo.error) {
-        getFileUrl(photo.key)
+        getFileUrl(photo.key, getToken)
           .then((url) => {
             setPhotos((prev) =>
               prev.map((p) => (p.key === photo.key ? { ...p, localUrl: url } : p))
@@ -133,7 +137,7 @@ export default function PhotoCapture({
           const compressed = await compressImage(file, 1920, 0.85)
 
           // Upload
-          const result = await uploadFile(compressed, 'photo', certificateId)
+          const result = await uploadFile(compressed, 'photo', certificateId, getToken)
 
           // Update state with real key
           setPhotos((prev) =>
@@ -159,7 +163,7 @@ export default function PhotoCapture({
       // Reset input so same file can be selected again
       if (fileInputRef.current) fileInputRef.current.value = ''
     },
-    [certificateId, maxPhotos, photoKeys, onPhotosChange]
+    [certificateId, maxPhotos, photoKeys, onPhotosChange, getToken]
   )
 
   const handleDelete = useCallback(
@@ -176,10 +180,10 @@ export default function PhotoCapture({
 
       // Delete from R2 (fire and forget — if it fails, orphaned file is harmless)
       if (!key.startsWith('uploading-')) {
-        deleteFile(key).catch(() => {})
+        deleteFile(key, getToken).catch(() => {})
       }
     },
-    [photoKeys, onPhotosChange]
+    [photoKeys, onPhotosChange, getToken]
   )
 
   const handleRetry = useCallback(
