@@ -1,5 +1,10 @@
 /**
- * CertVoice — Certificates CRUD API v2
+ * CertVoice — Certificates CRUD API v3
+ *
+ * v3 changes: Added type_data JSONB support for Minor Works certificates.
+ * MW-specific data (description, installation, circuit, test results,
+ * declaration, next inspection, scheme notification) stored in type_data.
+ * EICR certificates unchanged — continue using individual columns.
  *
  * Extended with nested CRUD for circuits, observations, boards.
  * Plus /sync endpoint for offline-first bulk reconciliation.
@@ -189,7 +194,7 @@ async function handleList(engineerId, env, cors, url, requestId) {
       c.id, c.report_number, c.status, c.certificate_type,
       c.client_name, c.client_address, c.installation_address,
       c.purpose, c.inspection_dates, c.overall_assessment,
-      c.pdf_r2_key, c.created_at, c.updated_at,
+      c.pdf_r2_key, c.type_data, c.created_at, c.updated_at,
       COALESCE(obs.c1_count, 0) AS c1_count,
       COALESCE(obs.c2_count, 0) AS c2_count,
       COALESCE(obs.c3_count, 0) AS c3_count,
@@ -222,6 +227,7 @@ async function handleList(engineerId, env, cors, url, requestId) {
     reportNumber: row.report_number,
     status: row.status,
     certificateType: row.certificate_type,
+    typeData: row.type_data ?? {},
     clientDetails: { clientName: row.client_name ?? '', clientAddress: row.client_address ?? '' },
     installationDetails: { installationAddress: row.installation_address ?? '' },
     reportReason: { purpose: row.purpose ?? '', inspectionDates: row.inspection_dates ?? [] },
@@ -267,6 +273,7 @@ async function handleGet(engineerId, certId, env, cors, requestId) {
     reportNumber: cert.report_number,
     status: cert.status,
     certificateType: cert.certificate_type,
+    typeData: cert.type_data ?? {},
     clientDetails: { clientName: cert.client_name ?? '', clientAddress: cert.client_address ?? '' },
     reportReason: { purpose: cert.purpose ?? '', inspectionDates: cert.inspection_dates ?? [] },
     installationDetails: {
@@ -429,7 +436,8 @@ async function handleCreate(engineerId, request, env, cors, requestId) {
       engineer_id, certificate_type, status, report_number,
       client_name, client_address, installation_address, installation_postcode,
       purpose, inspection_dates, description_of_premises,
-      extent_of_inspection, agreed_limitations, operational_limitations
+      extent_of_inspection, agreed_limitations, operational_limitations,
+      type_data
     ) VALUES (
       ${engineerId}, ${body.certificateType ?? 'EICR'}, 'DRAFT', ${reportNumber},
       ${body.clientName ?? null}, ${body.clientAddress ?? null},
@@ -437,12 +445,20 @@ async function handleCreate(engineerId, request, env, cors, requestId) {
       ${body.purpose ?? null}, ${body.inspectionDates ?? null},
       ${body.premisesType ?? 'DOMESTIC'},
       ${body.extentOfInspection ?? null}, ${body.agreedLimitations ?? null},
-      ${body.operationalLimitations ?? null}
+      ${body.operationalLimitations ?? null},
+      ${body.typeData ? JSON.stringify(body.typeData) : '{}'}
     )
-    RETURNING id, report_number, status, created_at
+    RETURNING id, report_number, status, certificate_type, created_at
   `
 
-  return json({ id: rows[0].id, reportNumber: rows[0].report_number, status: rows[0].status, createdAt: rows[0].created_at, requestId }, 201, cors)
+  return json({
+    id: rows[0].id,
+    reportNumber: rows[0].report_number,
+    status: rows[0].status,
+    certificateType: rows[0].certificate_type,
+    createdAt: rows[0].created_at,
+    requestId,
+  }, 201, cors)
 }
 
 // ============================================================
@@ -505,6 +521,16 @@ async function handleUpdate(engineerId, certId, request, env, cors, requestId) {
   if (body.bondingConductorCsa !== undefined) updates.bonding_conductor_csa = body.bondingConductorCsa
   // Status
   if (newStatus) updates.status = newStatus
+
+  // type_data (MW / EIC specific) — deep-merge: read existing, overlay new keys
+  if (body.typeData !== undefined) {
+    const existingRow = await sql`
+      SELECT type_data FROM certificates WHERE id = ${certId} LIMIT 1
+    `
+    const existingData = existingRow[0]?.type_data ?? {}
+    const merged = { ...existingData, ...body.typeData }
+    updates.type_data = JSON.stringify(merged)
+  }
 
   if (Object.keys(updates).length === 0) {
     return json({ error: 'No fields to update', requestId }, 400, cors)
