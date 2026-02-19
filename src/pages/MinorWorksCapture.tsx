@@ -303,11 +303,7 @@ export default function MinorWorksCapture() {
         stream.getTracks().forEach((t) => t.stop());
         const audioBlob = new Blob(chunks, { type: 'audio/webm' });
         setIsRecording(false);
-        setVoiceTranscript('Processing...');
-
-        const formData = new FormData();
-        formData.append('audio', audioBlob);
-        formData.append('certificateType', 'MINOR_WORKS');
+        setVoiceTranscript('Transcribing...');
 
         try {
           const token = await getTokenSafe();
@@ -315,19 +311,109 @@ export default function MinorWorksCapture() {
             setVoiceTranscript('Auth required — please sign in');
             return;
           }
+
           const apiBase = import.meta.env.VITE_API_BASE_URL || '';
-          const res = await fetch(`${apiBase}/api/voice/extract`, {
+
+          // Step 1: Transcribe audio → text (same endpoint EICR uses)
+          const formData = new FormData();
+          formData.append('audio', audioBlob);
+          const transcribeRes = await fetch(`${apiBase}/api/speech/transcribe`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${token}` },
             body: formData,
           });
-          if (res.ok) {
-            const data = await res.json();
-            setVoiceTranscript(data.transcript || '');
-            if (data.circuit) updateCircuit(data.circuit);
-            if (data.testResults) updateTestResults(data.testResults);
-          } else {
-            setVoiceTranscript('Voice extraction failed — enter manually');
+
+          if (!transcribeRes.ok) {
+            setVoiceTranscript('Transcription failed — enter manually');
+            return;
+          }
+
+          const { text: transcript } = await transcribeRes.json();
+          if (!transcript || transcript.trim().length < 5) {
+            setVoiceTranscript('No speech detected — try again');
+            return;
+          }
+
+          setVoiceTranscript(`"${transcript}" — extracting...`);
+
+          // Step 2: Send transcript to Claude proxy for structured extraction
+          const claudeBase = import.meta.env.VITE_CLAUDE_PROXY_URL || apiBase;
+          const extractRes = await fetch(`${claudeBase}/api/extract`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              transcript,
+              locationContext: '',
+              dbContext: cert?.circuit.dbReference || '',
+              existingCircuits: [],
+              earthingType: cert?.installation.earthingType || null,
+            }),
+          });
+
+          if (!extractRes.ok) {
+            setVoiceTranscript(`"${transcript}" — extraction failed, enter manually`);
+            return;
+          }
+
+          const data = await extractRes.json();
+          setVoiceTranscript(`"${transcript}"`);
+
+          // Map EICR-style extraction to Minor Works fields
+          if (data.type === 'circuit' && data.circuit) {
+            const c = data.circuit;
+            const circuitPatch: Partial<MinorWorksCircuit> = {};
+            if (c.circuitDescription) circuitPatch.circuitDescription = c.circuitDescription;
+            if (c.ocpdType || c.ocpdRating) {
+              circuitPatch.protectiveDevice = {
+                ...(cert?.circuit.protectiveDevice ?? { bs: '', type: '', rating: '' }),
+                ...(c.ocpdType ? { type: c.ocpdType } : {}),
+                ...(c.ocpdRating ? { rating: String(c.ocpdRating) } : {}),
+              };
+            }
+            if (c.liveConductorCsa) {
+              circuitPatch.wiringSystem = {
+                ...(cert?.circuit.wiringSystem ?? { cableType: '', csa: '', referenceMethod: '' }),
+                csa: String(c.liveConductorCsa),
+              };
+            }
+            if (Object.keys(circuitPatch).length > 0) updateCircuit(circuitPatch);
+
+            // Map test results
+            const testPatch: Partial<MinorWorksTestResults> = {};
+            if (c.r1r2 != null) {
+              testPatch.earthContinuity = {
+                ...(cert?.testResults.earthContinuity ?? { r1PlusR2: '', r2: '' }),
+                r1PlusR2: String(c.r1r2),
+              };
+            }
+            if (c.irLiveEarth != null || c.irLiveLive != null) {
+              testPatch.insulationResistance = {
+                ...(cert?.testResults.insulationResistance ?? { liveToEarth: '', liveToNeutral: '' }),
+                ...(c.irLiveEarth != null ? { liveToEarth: String(c.irLiveEarth) } : {}),
+                ...(c.irLiveLive != null ? { liveToNeutral: String(c.irLiveLive) } : {}),
+              };
+            }
+            if (c.zs != null) {
+              testPatch.earthFaultLoopImpedance = {
+                ...(cert?.testResults.earthFaultLoopImpedance ?? { zs: '' }),
+                zs: String(c.zs),
+              };
+            }
+            if (c.polarity) {
+              testPatch.polarity = c.polarity === 'TICK' ? 'satisfactory' : 'unsatisfactory';
+            }
+            if (c.rcdDisconnectionTime != null) {
+              testPatch.rcd = {
+                ...(cert?.testResults.rcd ?? { present: false, ratedResidualCurrent: '', operatingTime: '' }),
+                present: true,
+                operatingTime: String(c.rcdDisconnectionTime),
+                ...(c.rcdRating != null ? { ratedResidualCurrent: String(c.rcdRating) } : {}),
+              };
+            }
+            if (Object.keys(testPatch).length > 0) updateTestResults(testPatch);
           }
         } catch {
           setVoiceTranscript('Voice extraction failed — enter manually');
