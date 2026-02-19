@@ -7,10 +7,12 @@
  *   3. Sends them to Claude API (Sonnet) with a trade terminology system prompt
  *   4. Returns structured circuit/observation/supply data
  *   5. Polishes rough observation wording into BS 7671 compliant text
+ *   6. Extracts circuits from board schedule photos via Claude Vision
  *
  * Routes:
  *   POST /api/extract              — Voice transcript → structured JSON
  *   POST /api/polish-observation   — Raw observation → professional wording
+ *   POST /api/extract-board-photo  — Board schedule photo → circuit list
  *
  * Security:
  *   - Clerk JWT verified on every request
@@ -72,9 +74,24 @@ interface PolishRequest {
   dbReference: string
 }
 
+interface BoardPhotoRequest {
+  imageBase64: string
+  mediaType: 'image/jpeg' | 'image/png'
+}
+
 interface ClaudeMessage {
   role: 'user' | 'assistant'
-  content: string
+  content: string | ClaudeContentBlock[]
+}
+
+interface ClaudeContentBlock {
+  type: 'text' | 'image'
+  text?: string
+  source?: {
+    type: 'base64'
+    media_type: string
+    data: string
+  }
 }
 
 interface ClaudeResponse {
@@ -266,6 +283,63 @@ Respond with ONLY valid JSON, no markdown, no explanation:
 }`
 
 // ============================================================
+// BOARD PHOTO SCAN PROMPT
+// ============================================================
+
+const BOARD_SCAN_PROMPT = `You are CertVoice AI, a specialist in reading UK consumer unit and distribution board circuit schedule labels. You will receive a photograph of the circuit schedule card/label found on the inside of a consumer unit door.
+
+## TASK
+Examine the image carefully and extract every circuit listed on the schedule. Board schedule labels are typically formatted as a table or grid showing circuit numbers down the left and their descriptions, protective device types, and ratings.
+
+## WHAT TO LOOK FOR
+- Circuit numbers (1, 2, 3... or Way 1, Way 2...)
+- Circuit descriptions (Ring Final, Lighting, Cooker, Shower, Sockets, Immersion, etc.)
+- OCPD type letter (B, C, or D) — often printed on the MCB itself or noted on the schedule
+- OCPD rating in amps (6A, 10A, 16A, 20A, 32A, 40A, 45A, 50A, 63A)
+- RCD type if visible (Type A, Type AC)
+- RCD rating in mA if visible (30mA, 100mA, 300mA)
+- Whether circuits are on an RCBO (combined MCB+RCD)
+
+## CHALLENGES
+Labels may be:
+- Handwritten (sometimes illegible)
+- Faded or partially obscured
+- Printed in small font
+- Incomplete or blank for spare ways
+- Using abbreviations (Ltg = Lighting, R/F = Ring Final, Ckr = Cooker, Imm = Immersion, S/H = Storage Heater)
+
+## CONFIDENCE SCORING
+For each circuit, assess your confidence:
+- **high**: Text is clearly legible and unambiguous
+- **medium**: Partially legible, some interpretation needed (e.g. faded text, unclear handwriting)
+- **low**: Significant guesswork, heavily obscured, or ambiguous
+
+## RESPONSE FORMAT
+Respond with ONLY valid JSON, no markdown, no explanation:
+{
+  "boardReference": "string — e.g. 'DB1' or 'Consumer Unit' if visible, otherwise empty string",
+  "circuits": [
+    {
+      "circuitNumber": "string — e.g. '1', '2'",
+      "circuitDescription": "string — e.g. 'Ring Final', 'Lighting'",
+      "ocpdType": "B|C|D or null if not visible",
+      "ocpdRating": "number in amps or null if not visible",
+      "rcdType": "A|AC|B|F|S or null if not visible",
+      "rcdRating": "number in mA or null if not visible",
+      "confidence": "high|medium|low"
+    }
+  ]
+}
+
+## RULES
+- Include ALL circuits visible on the schedule, even spare/unused ways (mark as "Spare" in description)
+- Do NOT invent circuits that aren't on the label
+- If a field is not visible or legible, use null — do not guess
+- Order circuits by their number as they appear on the schedule
+- Common UK domestic boards have 6-16 ways
+- If the image is not a board schedule (wrong photo), return: { "boardReference": "", "circuits": [], "error": "Image does not appear to be a circuit schedule label" }`
+
+// ============================================================
 // GUARD HELPERS
 // ============================================================
 
@@ -429,6 +503,64 @@ async function callClaude(
 ): Promise<string> {
   const messages: ClaudeMessage[] = [
     { role: 'user', content: userMessage },
+  ]
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages,
+    }),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`Claude API error ${response.status}: ${errorText}`)
+  }
+
+  const data = (await response.json()) as ClaudeResponse
+
+  const textBlock = data.content.find((c) => c.type === 'text')
+  if (!textBlock) {
+    throw new Error('No text content in Claude response')
+  }
+
+  return textBlock.text
+}
+
+async function callClaudeVision(
+  apiKey: string,
+  imageBase64: string,
+  mediaType: string,
+  textPrompt: string,
+  systemPrompt: string,
+  maxTokens: number
+): Promise<string> {
+  const messages: ClaudeMessage[] = [
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: mediaType,
+            data: imageBase64,
+          },
+        },
+        {
+          type: 'text',
+          text: textPrompt,
+        },
+      ],
+    },
   ]
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -708,6 +840,82 @@ async function handlePolishObservation(
   }
 }
 
+async function handleExtractBoardPhoto(
+  request: Request,
+  env: Env,
+  cors: Record<string, string>,
+  requestId: string,
+  userId: string,
+  startTime: number
+): Promise<Response> {
+  const route = '/api/extract-board-photo'
+
+  try {
+    const body = (await request.json()) as BoardPhotoRequest
+
+    if (!body.imageBase64 || body.imageBase64.length < 100) {
+      structuredLog({
+        requestId, route, method: 'POST',
+        status: 400, latencyMs: Date.now() - startTime, userId,
+        message: 'Image data too small or missing',
+      })
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: 'Image data too small or missing',
+          code: 'INVALID_INPUT',
+          requestId,
+        }),
+        { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    const mediaType = body.mediaType ?? 'image/jpeg'
+    const textPrompt = 'Extract all circuits from this consumer unit circuit schedule label. Respond with ONLY valid JSON.'
+
+    const claudeResponse = await callClaudeVision(
+      env.ANTHROPIC_API_KEY,
+      body.imageBase64,
+      mediaType,
+      textPrompt,
+      BOARD_SCAN_PROMPT,
+      2048
+    )
+    const extractedData = parseClaudeResponse(claudeResponse)
+
+    const circuitCount = Array.isArray(extractedData.circuits)
+      ? (extractedData.circuits as unknown[]).length
+      : 0
+
+    structuredLog({
+      requestId, route, method: 'POST',
+      status: 200, latencyMs: Date.now() - startTime, userId,
+      message: `Board scan complete — ${circuitCount} circuits extracted`,
+    })
+
+    return new Response(JSON.stringify({ ...extractedData, requestId }), {
+      status: 200,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Internal error'
+    structuredLog({
+      requestId, route, method: 'POST',
+      status: 500, latencyMs: Date.now() - startTime, userId,
+      error: message,
+    })
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: 'Board scan failed',
+        code: 'API_ERROR',
+        requestId,
+      }),
+      { status: 500, headers: { ...cors, 'Content-Type': 'application/json' } }
+    )
+  }
+}
+
 // ============================================================
 // WORKER ENTRY
 // ============================================================
@@ -739,7 +947,7 @@ export default {
     }
 
     // Check route exists before running guards
-    const validRoutes = ['/api/extract', '/api/polish-observation']
+    const validRoutes = ['/api/extract', '/api/polish-observation', '/api/extract-board-photo']
     if (!validRoutes.includes(url.pathname)) {
       structuredLog({
         requestId, route: url.pathname, method: request.method,
@@ -765,6 +973,10 @@ export default {
 
     if (url.pathname === '/api/polish-observation') {
       return handlePolishObservation(request, env, cors, requestId, guard.userId, startTime)
+    }
+
+    if (url.pathname === '/api/extract-board-photo') {
+      return handleExtractBoardPhoto(request, env, cors, requestId, guard.userId, startTime)
     }
 
     // Should never reach here due to validRoutes check above
