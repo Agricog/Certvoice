@@ -118,7 +118,7 @@ function conductorConfigLabel(val: string | null | undefined): string {
 
 function bondingLabel(val: string | null | undefined): string {
   if (!val || val === 'NA') return 'N/A'
-  return val === 'YES' ? '✓' : val === 'NO' ? '✗' : val
+  return val === 'SATISFACTORY' ? '✓' : val === 'UNSATISFACTORY' ? '✗' : val
 }
 
 // ── Page header ─────────────────────────────────────────────────
@@ -270,7 +270,7 @@ function drawCircuitRow(
     n(c.irLiveLive),
     n(c.zs),
     c.rcdDisconnectionTime != null ? `${c.rcdDisconnectionTime}` : '--',
-    c.polarity === 'CORRECT' ? '✓' : c.polarity === 'NA' ? '--' : s(c.polarity),
+    c.polarity === 'TICK' ? '✓' : c.polarity === 'NA' ? '--' : s(c.polarity),
     s(c.remarks),
   ]
 
@@ -719,32 +719,22 @@ export async function generateEICPdf(cert: EICCertificate): Promise<Uint8Array> 
   y = drawSectionHeader(page, fonts.bold, y, 'Test Instruments')
 
   if (instruments?.multifunctionInstrument) {
-    y = drawFieldPair(page, fonts.regular, fonts.bold, y,
-      { label: 'Multifunction Tester', value: `${s(instruments.multifunctionInstrument.make)} ${s(instruments.multifunctionInstrument.model)}` },
-      { label: 'Serial No.', value: s(instruments.multifunctionInstrument.serialNumber) },
-    )
-    y = drawField(page, fonts.regular, fonts.bold, y, 'Calibration Date', s(instruments.multifunctionInstrument.calibrationDate))
+    y = drawField(page, fonts.regular, fonts.bold, y, 'Multifunction Tester', s(instruments.multifunctionInstrument))
   }
-
-  if (instruments?.continuityTester && instruments.continuityTester.make) {
-    y = drawFieldPair(page, fonts.regular, fonts.bold, y,
-      { label: 'Continuity Tester', value: `${s(instruments.continuityTester.make)} ${s(instruments.continuityTester.model)}` },
-      { label: 'Serial No.', value: s(instruments.continuityTester.serialNumber) },
-    )
+  if (instruments?.continuity) {
+    y = drawField(page, fonts.regular, fonts.bold, y, 'Continuity Tester', s(instruments.continuity))
   }
-
-  if (instruments?.insulationTester && instruments.insulationTester.make) {
-    y = drawFieldPair(page, fonts.regular, fonts.bold, y,
-      { label: 'Insulation Tester', value: `${s(instruments.insulationTester.make)} ${s(instruments.insulationTester.model)}` },
-      { label: 'Serial No.', value: s(instruments.insulationTester.serialNumber) },
-    )
+  if (instruments?.insulationResistance) {
+    y = drawField(page, fonts.regular, fonts.bold, y, 'Insulation Resistance Tester', s(instruments.insulationResistance))
   }
-
-  if (instruments?.rcdTester && instruments.rcdTester.make) {
-    y = drawFieldPair(page, fonts.regular, fonts.bold, y,
-      { label: 'RCD Tester', value: `${s(instruments.rcdTester.make)} ${s(instruments.rcdTester.model)}` },
-      { label: 'Serial No.', value: s(instruments.rcdTester.serialNumber) },
-    )
+  if (instruments?.rcdTester) {
+    y = drawField(page, fonts.regular, fonts.bold, y, 'RCD Tester', s(instruments.rcdTester))
+  }
+  if (instruments?.earthFaultLoopImpedance) {
+    y = drawField(page, fonts.regular, fonts.bold, y, 'Earth Fault Loop Impedance', s(instruments.earthFaultLoopImpedance))
+  }
+  if (instruments?.earthElectrodeResistance) {
+    y = drawField(page, fonts.regular, fonts.bold, y, 'Earth Electrode Resistance', s(instruments.earthElectrodeResistance))
   }
 
   y -= SPACING.sectionGap
@@ -761,7 +751,7 @@ export async function generateEICPdf(cert: EICCertificate): Promise<Uint8Array> 
     // Group by section
     const sections = new Map<string, InspectionItem[]>()
     for (const item of inspectionItems) {
-      const sec = item.section ?? 'General'
+      const sec = String(item.section ?? 'General')
       if (!sections.has(sec)) sections.set(sec, [])
       sections.get(sec)!.push(item)
     }
@@ -849,8 +839,7 @@ export async function generateEICPdf(cert: EICCertificate): Promise<Uint8Array> 
 
   for (const board of boards) {
     const boardCircuits = circuits.filter((c) => {
-      const cDbId = (c as Record<string, unknown>).dbId ?? (c as Record<string, unknown>).dbReference
-      return cDbId === board.dbReference || cDbId === board.id
+      return c.dbId === board.dbReference || c.dbId === board.id
     })
 
     if (boardCircuits.length === 0) continue
@@ -862,10 +851,10 @@ export async function generateEICPdf(cert: EICCertificate): Promise<Uint8Array> 
 
     // Board details line
     const boardInfo = [
-      board.dbMake ? `Make: ${board.dbMake}` : null,
-      board.dbType ? `Type: ${board.dbType}` : null,
-      board.zeAtBoard != null ? `Ze: ${board.zeAtBoard}Ω` : null,
-      board.zdb != null ? `Zdb: ${board.zdb}Ω` : null,
+      board.suppliedFrom ? `Supplied From: ${board.suppliedFrom}` : null,
+      board.distOcpdType ? `OCPD: ${board.distOcpdType}${board.distOcpdRating != null ? ` ${board.distOcpdRating}A` : ''}` : null,
+      board.zsAtDb != null ? `Zs: ${board.zsAtDb}Ω` : null,
+      board.ipfAtDb != null ? `Ipf: ${board.ipfAtDb}kA` : null,
     ].filter(Boolean).join('  |  ')
 
     if (boardInfo) {
