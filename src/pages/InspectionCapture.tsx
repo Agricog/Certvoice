@@ -617,7 +617,7 @@ export default function InspectionCapture() {
 
         // Track each scanned circuit
         scannedCircuits.forEach(() => {
-          trackCircuitCaptured('UNKNOWN', 'scan')
+          trackCircuitCaptured('UNKNOWN', 'manual')
         })
 
         // Reset scan state
