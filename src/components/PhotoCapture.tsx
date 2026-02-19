@@ -3,6 +3,7 @@
  *
  * Camera/gallery image picker for inspection evidence photos.
  * Compresses before upload, shows thumbnails, supports delete.
+ * Offline-aware: queues photos in IndexedDB when no signal.
  *
  * Props:
  *   - certificateId: UUID of the certificate
@@ -17,9 +18,9 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react'
 import {
-  uploadFile,
-  getFileUrl,
-  deleteFile,
+  uploadFileOffline,
+  getFileUrlOffline,
+  deleteFileOffline,
   compressImage,
   type GetToken,
 } from '../services/uploadService'
@@ -82,7 +83,7 @@ export default function PhotoCapture({
   useEffect(() => {
     photos.forEach((photo) => {
       if (!photo.localUrl && !photo.uploading && !photo.error) {
-        getFileUrl(photo.key, getToken)
+        getFileUrlOffline(photo.key, getToken)
           .then((url) => {
             setPhotos((prev) =>
               prev.map((p) => (p.key === photo.key ? { ...p, localUrl: url } : p))
@@ -136,10 +137,10 @@ export default function PhotoCapture({
           // Compress
           const compressed = await compressImage(file, 1920, 0.85)
 
-          // Upload
-          const result = await uploadFile(compressed, 'photo', certificateId, getToken)
+          // Upload (queues offline if no signal)
+          const result = await uploadFileOffline(compressed, 'photo', certificateId, getToken)
 
-          // Update state with real key
+          // Update state with real key (or offline:xxx temp key)
           setPhotos((prev) =>
             prev.map((p) =>
               p.key === tempKey
@@ -178,9 +179,9 @@ export default function PhotoCapture({
       // Notify parent
       onPhotosChange(photoKeys.filter((k) => k !== key))
 
-      // Delete from R2 (fire and forget — if it fails, orphaned file is harmless)
+      // Delete from R2 or remove from offline queue
       if (!key.startsWith('uploading-')) {
-        deleteFile(key, getToken).catch(() => {})
+        deleteFileOffline(key, getToken).catch(() => {})
       }
     },
     [photoKeys, onPhotosChange, getToken]
