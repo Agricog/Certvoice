@@ -1,8 +1,13 @@
 /**
- * CertVoice — Certificate API Service (v2)
+ * CertVoice — Certificate API Service (v3)
  *
  * Typed functions for all certificate CRUD endpoints.
  * Used by InspectionCapture and the sync service.
+ *
+ * v3 changes:
+ *   - typeData support for Minor Works / future cert types
+ *   - CreateCertificateParams accepts typeData
+ *   - CertificateListItem includes typeData + certificateType
  *
  * v2 changes:
  *   - Null token guard: throws ApiAuthError, never sends "Bearer null"
@@ -69,6 +74,7 @@ export interface CertificateListItem {
   reportNumber: string
   status: string
   certificateType: string
+  typeData: Record<string, unknown>
   clientDetails: { clientName: string; clientAddress: string }
   installationDetails: { installationAddress: string }
   reportReason: { purpose: string; inspectionDates: string[] }
@@ -91,6 +97,15 @@ export interface CreateCertificateParams {
   extentOfInspection?: string
   agreedLimitations?: string
   operationalLimitations?: string
+  typeData?: Record<string, unknown>
+}
+
+export interface CreateCertificateResponse {
+  id: string
+  reportNumber: string
+  status: string
+  certificateType: string
+  createdAt: string
 }
 
 export interface SyncStats {
@@ -174,7 +189,7 @@ export async function getCertificate(
 export async function createCertificate(
   getToken: TokenGetter,
   params: CreateCertificateParams
-): Promise<{ id: string; reportNumber: string; status: string; createdAt: string }> {
+): Promise<CreateCertificateResponse> {
   return apiCall('/api/certificates', getToken, {
     method: 'POST',
     body: JSON.stringify(params),
