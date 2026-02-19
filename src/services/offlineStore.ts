@@ -199,6 +199,31 @@ export async function deleteLocalCertificate(certId: string): Promise<void> {
     request.onerror = () => reject(new Error('Failed to delete certificate'))
   })
 }
+/** Update a single field on a stored certificate (used by sync service for serverCertId) */
+export async function updateCertificateField(
+  localId: string,
+  field: string,
+  value: unknown
+): Promise<void> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CERT_STORE, 'readwrite')
+    const store = tx.objectStore(CERT_STORE)
+    const getReq = store.get(localId)
+
+    getReq.onsuccess = () => {
+      const record = getReq.result as StoredCertificate | undefined
+      if (!record) { resolve(); return }
+
+      record.data[field] = value
+      const putReq = store.put(record)
+      putReq.onsuccess = () => resolve()
+      putReq.onerror = () => reject(new Error('Failed to update certificate field'))
+    }
+
+    getReq.onerror = () => reject(new Error('Failed to get certificate for field update'))
+  })
+}
 
 // ============================================================
 // SYNC QUEUE OPERATIONS
