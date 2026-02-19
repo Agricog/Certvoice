@@ -7,6 +7,11 @@
  *
  * Also handles download (serves binary) and delete.
  *
+ * Offline-aware wrappers (uploadFileOffline, getFileUrlOffline,
+ * deleteFileOffline) catch network failures and fall back to the
+ * IndexedDB photoQueue. The sync service drains the queue when
+ * connectivity returns.
+ *
  * Auth: All functions accept a `getToken` callback, injected from the React
  * layer via `useApiToken`. This keeps auth in one place and avoids coupling
  * to `window.Clerk`.
@@ -14,11 +19,21 @@
  * @module services/uploadService
  */
 
+import {
+  queuePhoto,
+  getQueuedPhotoByKey,
+  removePhotoByTempKey,
+  isOnline,
+} from './offlineStore'
+
 // ============================================================
 // CONFIG
 // ============================================================
 
 const R2_BASE_URL = import.meta.env.VITE_R2_BASE_URL ?? import.meta.env.VITE_API_BASE_URL ?? ''
+
+/** Prefix for offline-queued temp keys */
+export const OFFLINE_KEY_PREFIX = 'offline:'
 
 // ============================================================
 // TYPES
@@ -43,11 +58,12 @@ interface UploadUrlResponse {
 }
 
 // ============================================================
-// UPLOAD — Two-step flow
+// UPLOAD — Two-step flow (pure network)
 // ============================================================
 
 /**
  * Upload a file to R2 via the two-step worker flow.
+ * This is the pure network version — used by syncService to drain the queue.
  *
  * @param file - File or Blob to upload
  * @param fileType - 'photo' or 'signature'
@@ -117,7 +133,7 @@ export async function uploadFile(
 }
 
 // ============================================================
-// DOWNLOAD — Serve binary via worker
+// DOWNLOAD — Serve binary via worker (pure network)
 // ============================================================
 
 /**
@@ -150,7 +166,7 @@ export async function getFileUrl(key: string, getToken: GetToken): Promise<strin
 }
 
 // ============================================================
-// DELETE
+// DELETE (pure network)
 // ============================================================
 
 /**
@@ -176,6 +192,93 @@ export async function deleteFile(key: string, getToken: GetToken): Promise<void>
     const err = await res.json().catch(() => ({ error: 'Delete failed' }))
     throw new Error((err as { error?: string }).error ?? `Delete failed (${res.status})`)
   }
+}
+
+// ============================================================
+// OFFLINE-AWARE WRAPPERS
+// ============================================================
+
+/**
+ * Check if a key is an offline temp key.
+ */
+export function isOfflineKey(key: string): boolean {
+  return key.startsWith(OFFLINE_KEY_PREFIX)
+}
+
+/**
+ * Upload a file with offline fallback.
+ * Tries the network first. On failure when offline, queues the blob
+ * in IndexedDB and returns a temporary key (offline:{uuid}).
+ * The sync service uploads queued photos and replaces temp keys.
+ */
+export async function uploadFileOffline(
+  file: File | Blob,
+  fileType: FileType,
+  certificateId: string,
+  getToken: GetToken
+): Promise<UploadResult> {
+  // Try network upload first
+  try {
+    return await uploadFile(file, fileType, certificateId, getToken)
+  } catch (err) {
+    // Only queue if actually offline — rethrow auth/server errors
+    if (!isOnline()) {
+      const tempKey = `${OFFLINE_KEY_PREFIX}${crypto.randomUUID()}`
+      const contentType = file.type || (fileType === 'signature' ? 'image/png' : 'image/jpeg')
+      const filename = file instanceof File
+        ? file.name
+        : `${fileType}-${Date.now()}.${fileType === 'signature' ? 'png' : 'jpg'}`
+
+      await queuePhoto({
+        tempKey,
+        certId: certificateId,
+        fileType,
+        blob: file,
+        contentType,
+        filename,
+        createdAt: new Date().toISOString(),
+      })
+
+      return {
+        key: tempKey,
+        size: file.size,
+        contentType,
+      }
+    }
+
+    throw err
+  }
+}
+
+/**
+ * Get a file URL with offline fallback.
+ * If the key is an offline temp key, loads the blob from IndexedDB.
+ * Otherwise fetches from R2 via the worker.
+ */
+export async function getFileUrlOffline(key: string, getToken: GetToken): Promise<string> {
+  if (isOfflineKey(key)) {
+    const queued = await getQueuedPhotoByKey(key)
+    if (queued) {
+      return URL.createObjectURL(queued.blob)
+    }
+    throw new Error('Offline photo not found in queue')
+  }
+
+  return getFileUrl(key, getToken)
+}
+
+/**
+ * Delete a file with offline fallback.
+ * If the key is an offline temp key, removes from the IndexedDB queue.
+ * Otherwise deletes from R2 via the worker.
+ */
+export async function deleteFileOffline(key: string, getToken: GetToken): Promise<void> {
+  if (isOfflineKey(key)) {
+    await removePhotoByTempKey(key)
+    return
+  }
+
+  return deleteFile(key, getToken)
 }
 
 // ============================================================
