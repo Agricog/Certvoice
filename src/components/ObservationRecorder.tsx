@@ -7,6 +7,7 @@
  *   1. Inspector taps mic, describes the defect
  *   2. AI extracts: description, classification code, regulation, remedial action
  *   3. Inspector reviews and confirms classification
+ *   3a. Optional: Tap "Polish with AI" to upgrade wording to BS 7671 standard
  *   4. PhotoCapture allows evidence photos during review
  *   5. Observation added to Section K with photo keys
  *
@@ -31,10 +32,13 @@ import {
   ChevronDown,
   ChevronUp,
   Mic,
+  Sparkles,
+  Undo2,
 } from 'lucide-react'
 import VoiceCapture from './VoiceCapture'
 import PhotoCapture from './PhotoCapture'
 import { useAIExtraction } from '../hooks/useAIExtraction'
+import { useObservationPolish } from '../hooks/useObservationPolish'
 import type { ExtractionContext } from '../hooks/useAIExtraction'
 import type { Observation, ClassificationCode } from '../types/eicr'
 import type { GetToken } from '../services/uploadService'
@@ -162,12 +166,21 @@ export default function ObservationRecorder({
   )
   const [showTranscript, setShowTranscript] = useState(false)
 
+  // Polish state — keeps pre-polish snapshot for undo
+  const [prePolishSnapshot, setPrePolishSnapshot] = useState<{
+    observationText: string
+    regulationReference: string
+    remedialAction: string
+  } | null>(null)
+
   const {
     status: extractionStatus,
     error: extractionError,
     extract,
     reset: resetExtraction,
   } = useAIExtraction()
+
+  const { polish, isPolishing, error: polishError } = useObservationPolish()
 
   const context: ExtractionContext = {
     locationContext,
@@ -226,6 +239,51 @@ export default function ObservationRecorder({
     })
   }, [])
 
+  // --- Polish observation with AI ---
+  const handlePolish = useCallback(async () => {
+    if (!extractedObs?.observationText || !selectedCode) return
+
+    // Save snapshot for undo
+    setPrePolishSnapshot({
+      observationText: extractedObs.observationText ?? '',
+      regulationReference: extractedObs.regulationReference ?? '',
+      remedialAction: extractedObs.remedialAction ?? '',
+    })
+
+    const result = await polish(extractedObs.observationText, selectedCode, {
+      location: extractedObs.location,
+      circuitReference: extractedObs.circuitReference,
+      dbReference: extractedObs.dbReference,
+    })
+
+    if (result) {
+      setExtractedObs((prev) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          observationText: result.polishedText,
+          regulationReference: result.regulationReference,
+          remedialAction: result.remedialAction,
+        }
+      })
+    }
+  }, [extractedObs, selectedCode, polish])
+
+  // --- Undo polish ---
+  const handleUndoPolish = useCallback(() => {
+    if (!prePolishSnapshot) return
+    setExtractedObs((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        observationText: prePolishSnapshot.observationText,
+        regulationReference: prePolishSnapshot.regulationReference,
+        remedialAction: prePolishSnapshot.remedialAction,
+      }
+    })
+    setPrePolishSnapshot(null)
+  }, [prePolishSnapshot])
+
   // --- Confirm observation ---
   const handleConfirm = useCallback(() => {
     if (!extractedObs || !selectedCode) return
@@ -254,6 +312,7 @@ export default function ObservationRecorder({
     setVoiceTranscript(null)
     setFieldConfidence(null)
     setShowTranscript(false)
+    setPrePolishSnapshot(null)
     resetExtraction()
   }, [resetExtraction])
 
@@ -415,7 +474,43 @@ export default function ObservationRecorder({
 
       {/* Observation Text */}
       <div className={`cv-data-field ${isLowConfidence('observationText') ? 'border-certvoice-amber/40 bg-certvoice-amber/5' : ''}`}>
-        <div className="cv-data-label">Observation</div>
+        <div className="flex items-center justify-between mb-1">
+          <div className="cv-data-label">Observation</div>
+          {/* Polish / Undo buttons */}
+          {prePolishSnapshot ? (
+            <button
+              onClick={handleUndoPolish}
+              className="inline-flex items-center gap-1 text-[10px] text-certvoice-muted
+                         hover:text-certvoice-text transition-colors"
+              type="button"
+            >
+              <Undo2 className="w-3 h-3" />
+              Undo polish
+            </button>
+          ) : (
+            <button
+              onClick={handlePolish}
+              disabled={isPolishing || !selectedCode || !extractedObs.observationText}
+              className="inline-flex items-center gap-1 text-[10px] font-semibold
+                         text-certvoice-accent hover:text-certvoice-accent/80
+                         disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              type="button"
+            >
+              {isPolishing ? (
+                <>
+                  <span className="w-3 h-3 border border-certvoice-accent/50 border-t-certvoice-accent
+                                   rounded-full animate-spin" />
+                  Polishing...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3 h-3" />
+                  Polish with AI
+                </>
+              )}
+            </button>
+          )}
+        </div>
         <textarea
           value={extractedObs.observationText ?? ''}
           onChange={(e) =>
@@ -427,6 +522,12 @@ export default function ObservationRecorder({
           className="w-full bg-transparent text-xs text-certvoice-text border-none outline-none
                      resize-none focus:text-certvoice-accent font-mono leading-relaxed"
         />
+        {polishError && (
+          <div className="flex items-center gap-1 text-[10px] text-certvoice-red mt-1">
+            <AlertTriangle className="w-2.5 h-2.5" />
+            Polish failed — {polishError}
+          </div>
+        )}
         {isLowConfidence('observationText') && (
           <div className="flex items-center gap-1 text-[10px] text-certvoice-amber/70 mt-1">
             <AlertTriangle className="w-2.5 h-2.5" />
