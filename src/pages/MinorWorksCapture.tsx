@@ -425,7 +425,7 @@ export default function MinorWorksCapture() {
             }
 
             // ── Apply both patches in one update to avoid stale state ──
-            console.log('PATCHES:', JSON.stringify(circuitPatch), JSON.stringify(testPatch));if (Object.keys(circuitPatch).length > 0 || Object.keys(testPatch).length > 0) {
+            if (Object.keys(circuitPatch).length > 0 || Object.keys(testPatch).length > 0) {
               const updated = { ...cert! };
               if (Object.keys(circuitPatch).length > 0) {
                 updated.circuit = { ...updated.circuit, ...circuitPatch };
