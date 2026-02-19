@@ -28,6 +28,7 @@ import {
 import SignatureCapture from './SignatureCapture'
 import type { Declaration } from '../types/eicr'
 import type { EngineerProfile } from '../types/eicr'
+import type { GetToken } from '../services/uploadService'
 
 // ============================================================
 // TYPES
@@ -40,6 +41,8 @@ interface DeclarationFormProps {
   declaration: Declaration
   /** Called on every field change */
   onDeclarationChange: (declaration: Declaration) => void
+  /** Auth token provider (from useApiToken hook) */
+  getToken: GetToken
   /** Engineer profile for auto-fill (from Settings/API) */
   engineerProfile?: EngineerProfile | null
   /** Disable all inputs (e.g. when certificate is issued) */
@@ -92,6 +95,7 @@ export default function DeclarationForm({
   certificateId,
   declaration,
   onDeclarationChange,
+  getToken,
   engineerProfile,
   disabled = false,
 }: DeclarationFormProps) {
@@ -307,6 +311,7 @@ export default function DeclarationForm({
             certificateId={certificateId}
             signatureKey={declaration.inspectorSignatureKey}
             onSignatureChange={handleInspectorSignature}
+            getToken={getToken}
             label="Inspector Signature"
             disabled={disabled}
           />
@@ -382,6 +387,7 @@ export default function DeclarationForm({
             certificateId={certificateId}
             signatureKey={declaration.qsSignatureKey}
             onSignatureChange={handleQsSignature}
+            getToken={getToken}
             label="QS Signature"
             disabled={disabled}
           />
