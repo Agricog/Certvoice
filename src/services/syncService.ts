@@ -243,7 +243,7 @@ export function createSyncService(
    */
   async function syncMinorWorksCert(stored: StoredCertificate): Promise<void> {
     const raw = stored.data as unknown as Record<string, unknown>
-    const certId = raw.id as string
+    // certId is the local IndexedDB ID (stored.id), serverCertId is the API ID
     const serverCertId = raw.serverCertId as string | undefined
 
     // Extract client details for top-level columns
@@ -279,9 +279,9 @@ export function createSyncService(
       // New MW cert — create on server
       const result = await createCertificate(getToken, {
         certificateType: 'MINOR_WORKS',
-        clientName,
-        clientAddress,
-        installationAddress: clientAddress,
+        clientName: clientName ?? undefined,
+        clientAddress: clientAddress ?? undefined,
+        installationAddress: clientAddress ?? undefined,
         typeData,
       })
 
