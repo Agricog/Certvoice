@@ -102,10 +102,31 @@ interface SignatureImages {
 // SAFE VALUE HELPER
 // ============================================================
 
+/** Replace non-WinAnsi characters with ASCII equivalents */
+function sanitize(text: string): string {
+  return text
+    .replace(/≤/g, '<=')
+    .replace(/≥/g, '>=')
+    .replace(/±/g, '+/-')
+    .replace(/Ω/g, 'ohm')
+    .replace(/°/g, 'deg')
+    .replace(/²/g, '2')
+    .replace(/³/g, '3')
+    .replace(/–/g, '-')
+    .replace(/—/g, '-')
+    .replace(/'/g, "'")
+    .replace(/'/g, "'")
+    .replace(/"/g, '"')
+    .replace(/"/g, '"')
+    .replace(/…/g, '...')
+    .replace(/×/g, 'x')
+    .replace(/[^\x00-\xFF]/g, '?')  // catch-all for anything else outside Latin-1
+}
+
 /** Safely convert any value to a display string */
 function s(val: unknown): string {
   if (val == null || val === '') return '--'
-  return String(val)
+  return sanitize(String(val))
 }
 
 // ============================================================
@@ -597,7 +618,7 @@ function drawInspectionPages(
     if (item.section !== currentSection) {
       currentSection = item.section
       y -= 4
-      page.drawText(item.sectionTitle ?? `Section ${item.section}`, {
+      page.drawText(sanitize(item.sectionTitle ?? `Section ${item.section}`), {
         x: PAGE.marginLeft,
         y,
         size: FONT.label,
@@ -615,7 +636,7 @@ function drawInspectionPages(
       color: COLOURS.muted,
     })
 
-    page.drawText((item.description ?? '').substring(0, 70), {
+    page.drawText(sanitize((item.description ?? '').substring(0, 70)), {
       x: PAGE.marginLeft + 40,
       y,
       size: FONT.tableBody,
