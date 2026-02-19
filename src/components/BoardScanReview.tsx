@@ -48,11 +48,11 @@ const CONFIDENCE_STYLES: Record<string, { dot: string; label: string }> = {
 }
 
 function ConfidenceDot({ level }: { level: string }) {
-  const style = CONFIDENCE_STYLES[level] ?? CONFIDENCE_STYLES.low
-  return (
+  const style = CONFIDENCE_STYLES[level] ?? CONFIDENCE_STYLES['low']!
+return (
     <span
-      className={`inline-block w-2 h-2 rounded-full ${style.dot}`}
-      title={style.label}
+      className={`inline-block w-2 h-2 rounded-full ${style!.dot}`}
+      title={style!.label}
     />
   )
 }
