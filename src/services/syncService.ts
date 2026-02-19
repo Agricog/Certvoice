@@ -53,8 +53,8 @@ import {
   ApiAuthError,
   ApiRateLimitError,
 } from './certificateApi'
-import { uploadFile, isOfflineKey } from './uploadService'
-import type { EICRCertificate, Observation, Declaration } from '../types/eicr'
+import { uploadFile, } from './uploadService'
+import type { Observation, Declaration } from '../types/eicr'
 
 // ============================================================
 // TYPES
