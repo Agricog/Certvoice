@@ -1,7 +1,7 @@
 /**
  * CertVoice — Certificates Page
  *
- * List of all certificates (EICR + Minor Works) with search,
+ * List of all certificates (EICR, Minor Works, EIC) with search,
  * status filtering, and cert type filtering.
  *
  * Offline-first: loads from IndexedDB immediately, then merges
@@ -27,6 +27,7 @@ import {
   WifiOff,
   Wrench,
   ClipboardList,
+  Award,
 } from 'lucide-react'
 import type {
   EICRCertificate,
@@ -121,10 +122,8 @@ function mapCertToListItem(cert: Partial<EICRCertificate>, isLocal = false): Cer
 
   if (isMW) {
     const mw = raw as Record<string, unknown>
-    // Handle both IndexedDB shape (flat) and API shape (nested in typeData)
-  const typeData = mw.typeData as Record<string, unknown> | undefined
-  const client = (mw.clientDetails ?? typeData?.clientDetails) as Record<string, string> | undefined
-  const desc = (mw.description ?? typeData?.description) as Record<string, string> | undefined
+    const client = mw.clientDetails as Record<string, string> | undefined
+    const desc = mw.description as Record<string, string> | undefined
     return {
       id: String(mw.id ?? ''),
       reportNumber: '',
@@ -171,6 +170,9 @@ function mapCertToListItem(cert: Partial<EICRCertificate>, isLocal = false): Cer
 function getCertLink(cert: CertificateListItem): string {
   if (cert.certificateType === 'MINOR_WORKS') {
     return `/minor-works/${cert.id}`
+  }
+  if (cert.certificateType === 'EIC') {
+    return `/eic/${cert.id}`
   }
   switch (cert.status) {
     case 'DRAFT':
@@ -305,6 +307,7 @@ export default function Certificates() {
     all: certificates.length,
     eicr: certificates.filter((c) => c.certificateType === 'EICR').length,
     mw: certificates.filter((c) => c.certificateType === 'MINOR_WORKS').length,
+    eic: certificates.filter((c) => c.certificateType === 'EIC').length,
   }), [certificates])
 
   const FILTERS: Array<{ value: StatusFilter; label: string; count: number }> = [
@@ -318,6 +321,7 @@ export default function Certificates() {
     { value: 'ALL', label: 'All Types', count: certTypeCounts.all, icon: FileText },
     { value: 'EICR', label: 'EICR', count: certTypeCounts.eicr, icon: ClipboardList },
     { value: 'MINOR_WORKS', label: 'Minor Works', count: certTypeCounts.mw, icon: Wrench },
+    { value: 'EIC', label: 'EIC', count: certTypeCounts.eic, icon: Award },
   ]
 
   // ============================================================
@@ -418,7 +422,7 @@ export default function Certificates() {
               </div>
 
               {/* Cert Type Filter */}
-              {certificates.length > 0 && certTypeCounts.mw > 0 && (
+              {certificates.length > 0 && (certTypeCounts.mw > 0 || certTypeCounts.eic > 0) && (
                 <div className="flex gap-1">
                   {CERT_TYPE_FILTERS.map((f) => {
                     const Icon = f.icon
@@ -491,6 +495,7 @@ export default function Certificates() {
                     const config = getStatusConfig(cert.status)
                     const StatusIcon = config.icon
                     const isMW = cert.certificateType === 'MINOR_WORKS'
+                    const isEIC = cert.certificateType === 'EIC'
                     const { C1, C2, C3, FI } = cert.observationCounts
 
                     return (
@@ -515,9 +520,11 @@ export default function Certificates() {
                             <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
                               isMW
                                 ? 'bg-certvoice-amber/15 text-certvoice-amber'
-                                : 'bg-certvoice-accent/15 text-certvoice-accent'
+                                : isEIC
+                                  ? 'bg-emerald-500/15 text-emerald-400'
+                                  : 'bg-certvoice-accent/15 text-certvoice-accent'
                             }`}>
-                              {isMW ? 'MW' : 'EICR'}
+                              {isMW ? 'MW' : isEIC ? 'EIC' : 'EICR'}
                             </span>
 
                             {cert.overallAssessment && (
