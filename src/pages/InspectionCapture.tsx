@@ -1100,6 +1100,7 @@ export default function InspectionCapture() {
           nextItemNumber={observations.length + 1}
           earthingType={earthingType}
           existingCircuits={boardCircuits.map((c) => c.circuitNumber ?? '')}
+          getToken={getToken}
           editingObservation={editingObsIndex !== null ? observations[editingObsIndex] ?? null : null}
           onObservationConfirmed={handleObservationConfirmed}
           onCancel={() => {
@@ -1148,6 +1149,7 @@ export default function InspectionCapture() {
         certificateId={certificate.id ?? ''}
         declaration={declaration}
         onDeclarationChange={handleDeclarationChange}
+        getToken={getToken}
         engineerProfile={engineerProfile}
         disabled={certificate.status === 'ISSUED'}
       />
