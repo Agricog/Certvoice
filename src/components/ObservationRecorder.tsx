@@ -250,7 +250,7 @@ export default function ObservationRecorder({
       remedialAction: extractedObs.remedialAction ?? '',
     })
 
-    const result = await polish(extractedObs.observationText, selectedCode, {
+    const result = await polish(extractedObs.observationText, selectedCode, getToken, {
       location: extractedObs.location,
       circuitReference: extractedObs.circuitReference,
       dbReference: extractedObs.dbReference,
@@ -267,7 +267,7 @@ export default function ObservationRecorder({
         }
       })
     }
-  }, [extractedObs, selectedCode, polish])
+  }, [extractedObs, selectedCode, getToken, polish])
 
   // --- Undo polish ---
   const handleUndoPolish = useCallback(() => {
