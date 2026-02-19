@@ -41,7 +41,7 @@ import {
   EMPTY_SCHEME_NOTIFICATION,
 } from '../types/minorWorks';
 import type { ClientDetails, TestInstruments } from '../types/eicr';
-import { generateMinorWorksPdf } from '../services/minorWorksPdf';
+import { generateMinorWorksBlobUrl } from '../services/minorWorksPdf';
 
 // ── Section collapse state ──────────────────────────────────────
 type SectionKey =
@@ -350,40 +350,52 @@ export default function MinorWorksCapture() {
   // ── PDF download & share ──────────────────────────────────────
   const pdfBlobRef = useRef<string | null>(null);
 
-  const handleDownloadPdf = useCallback(() => {
+  const handleDownloadPdf = useCallback(async () => {
     if (!cert) return;
-    const blob = generateMinorWorksPdf(cert);
-    if (pdfBlobRef.current) URL.revokeObjectURL(pdfBlobRef.current);
-    const url = URL.createObjectURL(blob);
-    pdfBlobRef.current = url;
-    const a = document.createElement('a');
-    a.href = url;
-    const addr = cert.clientDetails.clientAddress.split('\n')[0]?.trim().replace(/[^a-zA-Z0-9]/g, '_') || 'MinorWorks';
-    a.download = `MW_${addr}_${cert.description.dateOfCompletion || 'draft'}.pdf`;
-    a.click();
+    try {
+      if (pdfBlobRef.current) URL.revokeObjectURL(pdfBlobRef.current);
+      const { url, filename } = await generateMinorWorksBlobUrl(cert);
+      pdfBlobRef.current = url;
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+    } catch {
+      // PDF generation failed — could add error toast later
+    }
   }, [cert]);
 
   const handleSharePdf = useCallback(async () => {
     if (!cert) return;
-    const blob = generateMinorWorksPdf(cert);
-    const addr = cert.clientDetails.clientAddress.split('\n')[0]?.trim().replace(/[^a-zA-Z0-9]/g, '_') || 'MinorWorks';
-    const filename = `MW_${addr}_${cert.description.dateOfCompletion || 'draft'}.pdf`;
-
-    if (navigator.share && navigator.canShare) {
+    try {
+      const { url, filename } = await generateMinorWorksBlobUrl(cert);
+      const res = await fetch(url);
+      const blob = await res.blob();
       const file = new File([blob], filename, { type: 'application/pdf' });
-      try {
-        await navigator.share({ files: [file], title: 'Minor Works Certificate' });
-        return;
-      } catch {
-        // User cancelled or share failed — fall through to mailto
-      }
-    }
 
-    // Fallback: download + mailto
-    handleDownloadPdf();
-    const subject = encodeURIComponent(`Minor Works Certificate — ${cert.clientDetails.clientAddress.split('\n')[0] || ''}`);
-    window.location.href = `mailto:?subject=${subject}&body=${encodeURIComponent('Please find the Minor Works Certificate attached.')}`;
-  }, [cert, handleDownloadPdf]);
+      if (navigator.share) {
+        try {
+          await navigator.share({ files: [file], title: 'Minor Works Certificate' });
+          URL.revokeObjectURL(url);
+          return;
+        } catch {
+          // User cancelled or share failed — fall through to mailto
+        }
+      }
+
+      // Fallback: download + mailto
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      const subject = encodeURIComponent(`Minor Works Certificate — ${cert.clientDetails.clientAddress.split('\n')[0] || ''}`);
+      window.location.href = `mailto:?subject=${subject}&body=${encodeURIComponent('Please find the Minor Works Certificate attached.')}`;
+    } catch {
+      // Share failed — could add error toast later
+    }
+  }, [cert]);
 
   // ── Render helpers ──────────────────────────────────────────
   if (loading || !cert) {
