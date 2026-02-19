@@ -37,6 +37,7 @@ import PhotoCapture from './PhotoCapture'
 import { useAIExtraction } from '../hooks/useAIExtraction'
 import type { ExtractionContext } from '../hooks/useAIExtraction'
 import type { Observation, ClassificationCode } from '../types/eicr'
+import type { GetToken } from '../services/uploadService'
 import { CLASSIFICATION_DEFINITIONS } from '../utils/bs7671'
 import { preprocessTranscript } from '../utils/speechParser'
 import { trackObservationCaptured } from '../utils/analytics'
@@ -58,6 +59,8 @@ interface ObservationRecorderProps {
   earthingType: string | null
   /** Existing circuit numbers (passed to AI context) */
   existingCircuits: string[]
+  /** Auth token provider (from useApiToken hook) */
+  getToken: GetToken
   /** Existing observation when editing (loads saved photoKeys, text, etc.) */
   editingObservation?: Partial<Observation> | null
   /** Called when inspector confirms an observation */
@@ -130,6 +133,7 @@ export default function ObservationRecorder({
   nextItemNumber,
   earthingType,
   existingCircuits,
+  getToken,
   editingObservation,
   onObservationConfirmed,
   onCancel,
@@ -530,6 +534,7 @@ export default function ObservationRecorder({
         certificateId={certificateId}
         photoKeys={photoKeys}
         onPhotosChange={handlePhotosChange}
+        getToken={getToken}
         maxPhotos={4}
       />
 
