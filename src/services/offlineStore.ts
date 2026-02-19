@@ -1,19 +1,14 @@
 /**
  * CertVoice — Offline Store (IndexedDB)
  *
- * Provides offline-first persistence for certificates.
+ * Provides offline-first persistence for certificates and photo blobs.
  * Every change is written to IndexedDB immediately (instant, no network).
  * The sync service reads from here and pushes to the API when online.
  *
  * Stores:
  *   certificates  — Full certificate state (mirrors React state)
  *   syncQueue     — Pending operations to sync when online
- *
- * Usage:
- *   await offlineStore.saveCertificate(cert)      // instant local save
- *   await offlineStore.getCertificate(id)          // load from local
- *   await offlineStore.queueSync(certId, op)       // queue for background sync
- *   await offlineStore.getPendingSyncs()            // get queued ops
+ *   photoQueue    — Blobs queued for R2 upload when back online (v2)
  *
  * @module services/offlineStore
  */
@@ -25,9 +20,10 @@ import type { EICRCertificate } from '../types/eicr'
 // ============================================================
 
 const DB_NAME = 'certvoice-offline'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const CERT_STORE = 'certificates'
 const SYNC_STORE = 'syncQueue'
+const PHOTO_STORE = 'photoQueue'
 
 // ============================================================
 // TYPES
@@ -60,6 +56,23 @@ export interface StoredCertificate {
   isDirty: boolean
 }
 
+export interface QueuedPhoto {
+  id?: number
+  /** Temporary key used in photoKeys/signatureKey until upload completes */
+  tempKey: string
+  /** Certificate this photo belongs to */
+  certId: string
+  /** 'photo' or 'signature' */
+  fileType: 'photo' | 'signature'
+  /** The actual image blob (stored natively in IndexedDB) */
+  blob: Blob
+  /** MIME type */
+  contentType: string
+  /** Original or generated filename */
+  filename: string
+  createdAt: string
+}
+
 // ============================================================
 // DATABASE
 // ============================================================
@@ -72,19 +85,26 @@ function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION)
 
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result
+      const oldVersion = event.oldVersion
 
-      // Certificates store — keyed by certificate ID
-      if (!db.objectStoreNames.contains(CERT_STORE)) {
+      // v1 stores: certificates + syncQueue
+      if (oldVersion < 1) {
         const certStore = db.createObjectStore(CERT_STORE, { keyPath: 'id' })
         certStore.createIndex('isDirty', 'isDirty', { unique: false })
         certStore.createIndex('lastModified', 'lastModified', { unique: false })
+
+        db.createObjectStore(SYNC_STORE, { keyPath: 'id', autoIncrement: true })
       }
 
-      // Sync queue — auto-increment ID, FIFO processing
-      if (!db.objectStoreNames.contains(SYNC_STORE)) {
-        db.createObjectStore(SYNC_STORE, { keyPath: 'id', autoIncrement: true })
+      // v2 store: photoQueue (blobs awaiting R2 upload)
+      if (oldVersion < 2) {
+        if (!db.objectStoreNames.contains(PHOTO_STORE)) {
+          const photoStore = db.createObjectStore(PHOTO_STORE, { keyPath: 'id', autoIncrement: true })
+          photoStore.createIndex('certId', 'certId', { unique: false })
+          photoStore.createIndex('tempKey', 'tempKey', { unique: true })
+        }
       }
     }
 
@@ -199,6 +219,7 @@ export async function deleteLocalCertificate(certId: string): Promise<void> {
     request.onerror = () => reject(new Error('Failed to delete certificate'))
   })
 }
+
 /** Update a single field on a stored certificate (used by sync service for serverCertId) */
 export async function updateCertificateField(
   localId: string,
@@ -222,6 +243,92 @@ export async function updateCertificateField(
     }
 
     getReq.onerror = () => reject(new Error('Failed to get certificate for field update'))
+  })
+}
+
+// ============================================================
+// PHOTO QUEUE OPERATIONS
+// ============================================================
+
+/** Queue a photo blob for upload when back online */
+export async function queuePhoto(photo: Omit<QueuedPhoto, 'id'>): Promise<void> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_STORE, 'readwrite')
+    const store = tx.objectStore(PHOTO_STORE)
+    const request = store.add(photo)
+    request.onsuccess = () => resolve()
+    request.onerror = () => reject(new Error('Failed to queue photo'))
+  })
+}
+
+/** Get all pending photos awaiting upload */
+export async function getPendingPhotos(): Promise<QueuedPhoto[]> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_STORE, 'readonly')
+    const store = tx.objectStore(PHOTO_STORE)
+    const request = store.getAll()
+    request.onsuccess = () => resolve(request.result ?? [])
+    request.onerror = () => reject(new Error('Failed to get pending photos'))
+  })
+}
+
+/** Get a single queued photo by its temp key (for local display) */
+export async function getQueuedPhotoByKey(tempKey: string): Promise<QueuedPhoto | null> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_STORE, 'readonly')
+    const store = tx.objectStore(PHOTO_STORE)
+    const index = store.index('tempKey')
+    const request = index.get(tempKey)
+    request.onsuccess = () => resolve(request.result ?? null)
+    request.onerror = () => reject(new Error('Failed to get queued photo'))
+  })
+}
+
+/** Remove a photo from the queue after successful upload */
+export async function removePhotoQueueItem(id: number): Promise<void> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_STORE, 'readwrite')
+    const store = tx.objectStore(PHOTO_STORE)
+    const request = store.delete(id)
+    request.onsuccess = () => resolve()
+    request.onerror = () => reject(new Error('Failed to remove photo from queue'))
+  })
+}
+
+/** Remove a queued photo by its temp key (for delete while still offline) */
+export async function removePhotoByTempKey(tempKey: string): Promise<void> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_STORE, 'readwrite')
+    const store = tx.objectStore(PHOTO_STORE)
+    const index = store.index('tempKey')
+    const getReq = index.getKey(tempKey)
+
+    getReq.onsuccess = () => {
+      const key = getReq.result
+      if (key == null) { resolve(); return }
+      const delReq = store.delete(key)
+      delReq.onsuccess = () => resolve()
+      delReq.onerror = () => reject(new Error('Failed to remove photo by temp key'))
+    }
+
+    getReq.onerror = () => reject(new Error('Failed to find photo by temp key'))
+  })
+}
+
+/** Get count of queued photos */
+export async function pendingPhotoCount(): Promise<number> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_STORE, 'readonly')
+    const store = tx.objectStore(PHOTO_STORE)
+    const request = store.count()
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(new Error('Failed to count queued photos'))
   })
 }
 
