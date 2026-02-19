@@ -121,8 +121,10 @@ function mapCertToListItem(cert: Partial<EICRCertificate>, isLocal = false): Cer
 
   if (isMW) {
     const mw = raw as Record<string, unknown>
-    const client = mw.clientDetails as Record<string, string> | undefined
-    const desc = mw.description as Record<string, string> | undefined
+    // Handle both IndexedDB shape (flat) and API shape (nested in typeData)
+  const typeData = mw.typeData as Record<string, unknown> | undefined
+  const client = (mw.clientDetails ?? typeData?.clientDetails) as Record<string, string> | undefined
+  const desc = (mw.description ?? typeData?.description) as Record<string, string> | undefined
     return {
       id: String(mw.id ?? ''),
       reportNumber: '',
