@@ -433,12 +433,7 @@ export default function NewInspection() {
               )
             })}
           </div>
-
-          <div className="cv-panel p-3">
-            <p className="text-xs text-certvoice-muted text-center">
-              EIC (Electrical Installation Certificate) coming soon
-            </p>
-          </div>
+          
         </div>
       </>
     )
