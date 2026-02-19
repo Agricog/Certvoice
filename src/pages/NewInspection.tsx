@@ -32,6 +32,7 @@ import {
   AlertTriangle,
   Zap,
   Wrench,
+  Award,
 } from 'lucide-react'
 import type {
   EICRCertificate,
@@ -66,6 +67,12 @@ const CERT_TYPES: { value: CertificateType; label: string; description: string; 
     label: 'Minor Works',
     description: 'Minor Electrical Installation Works Certificate — socket additions, light fittings, small jobs',
     icon: Wrench,
+  },
+  {
+    value: 'EIC',
+    label: 'EIC',
+    description: 'Electrical Installation Certificate — new installations, rewires, consumer unit replacements',
+    icon: Award,
   },
 ]
 
@@ -152,7 +159,7 @@ export default function NewInspection() {
     operationalLimitations: '',
   })
 
-  const steps = certType === 'MINOR_WORKS' ? MW_STEPS : EICR_STEPS
+  const steps = certType === 'MINOR_WORKS' || certType === 'EIC' ? MW_STEPS : EICR_STEPS
 
   // ============================================================
   // VALIDATION
@@ -161,8 +168,8 @@ export default function NewInspection() {
   const validateStep = useCallback((step: number): boolean => {
     const newErrors: Record<string, string> = {}
 
-    if (certType === 'MINOR_WORKS') {
-      // MW flow: step 0 = client, step 1 = review
+    if (certType === 'MINOR_WORKS' || certType === 'EIC') {
+      // MW/EIC flow: step 0 = client, step 1 = review
       if (step === 0) {
         if (!clientDetails.clientName.trim()) {
           newErrors.clientName = 'Client name is required'
@@ -335,7 +342,22 @@ export default function NewInspection() {
     }
   }, [clientDetails, navigate])
 
-  const handleCreate = certType === 'MINOR_WORKS' ? handleCreateMinorWorks : handleCreateEICR
+  const handleCreateEIC = useCallback(() => {
+    try {
+      const id = crypto.randomUUID()
+      const clientDetailsClean: ClientDetails = {
+        clientName: sanitizeText(clientDetails.clientName) ?? '',
+        clientAddress: sanitizeText(clientDetails.clientAddress) ?? '',
+      }
+
+      trackCertificateCreated('EIC')
+      navigate(`/eic/${id}`, { state: { clientDetails: clientDetailsClean } })
+    } catch (error) {
+      captureError(error, 'NewInspection.handleCreateEIC')
+    }
+  }, [clientDetails, navigate])
+
+  const handleCreate = certType === 'MINOR_WORKS' ? handleCreateMinorWorks : certType === 'EIC' ? handleCreateEIC : handleCreateEICR
 
   // ============================================================
   // FIELD HELPERS
@@ -479,10 +501,10 @@ export default function NewInspection() {
     <div className="space-y-4">
       <div>
         <h2 className="text-base font-semibold text-certvoice-text">
-          {certType === 'MINOR_WORKS' ? 'Client Details' : 'Section A — Client Details'}
+          {certType === 'MINOR_WORKS' || certType === 'EIC' ? 'Client Details' : 'Section A — Client Details'}
         </h2>
         <p className="text-xs text-certvoice-muted mt-1">
-          {certType === 'MINOR_WORKS'
+          {certType === 'MINOR_WORKS' || certType === 'EIC'
             ? 'Person the work is being carried out for'
             : 'Person ordering the report'}
         </p>
@@ -838,7 +860,7 @@ export default function NewInspection() {
   // ============================================================
 
   const renderReview = () => {
-    if (certType === 'MINOR_WORKS') {
+    if (certType === 'MINOR_WORKS' || certType === 'EIC') {
       return (
         <div className="space-y-4">
           <div>
@@ -975,7 +997,7 @@ export default function NewInspection() {
   // ============================================================
 
   const renderStepContent = () => {
-    if (certType === 'MINOR_WORKS') {
+    if (certType === 'MINOR_WORKS' || certType === 'EIC') {
       switch (currentStep) {
         case 0: return renderClientDetails()
         case 1: return renderReview()
@@ -995,8 +1017,8 @@ export default function NewInspection() {
   }
 
   const isLastStep = currentStep === steps.length - 1
-  const certLabel = certType === 'MINOR_WORKS' ? 'Minor Works' : 'EICR'
-  const startLabel = certType === 'MINOR_WORKS' ? 'Create Certificate' : 'Start Inspection'
+  const certLabel = certType === 'MINOR_WORKS' ? 'Minor Works' : certType === 'EIC' ? 'EIC' : 'EICR'
+  const startLabel = certType === 'EICR' ? 'Start Inspection' : 'Create Certificate'
 
   // ============================================================
   // RENDER: MAIN
