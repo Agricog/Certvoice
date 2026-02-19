@@ -33,6 +33,7 @@ import {
   Download,
   Trash2,
   Share2,
+  Camera,
 } from 'lucide-react'
 import type {
   EICRCertificate,
@@ -55,7 +56,10 @@ import SyncIndicator from '../components/SyncIndicator'
 import DeclarationForm, { EMPTY_DECLARATION } from '../components/DeclarationForm'
 import TestInstrumentsForm, { EMPTY_INSTRUMENTS } from '../components/TestInstrumentsForm'
 import BoardEditor from '../components/BoardEditor'
+import BoardScanCapture from '../components/BoardScanCapture'
+import BoardScanReview from '../components/BoardScanReview'
 import useEngineerProfile from '../hooks/useEngineerProfile'
+import type { BoardScanResult, ScannedCircuit } from '../hooks/useBoardScan'
 import { captureError } from '../utils/errorTracking'
 import { trackCircuitCaptured, trackObservationCaptured, trackChecklistProgress } from '../utils/analytics'
 import { saveCertificate as saveToLocal, getCertificate as getFromLocal } from '../services/offlineStore'
@@ -150,6 +154,10 @@ export default function InspectionCapture() {
   const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set())
   const [isExporting, setIsExporting] = useState(false)
   const [pdfReady, setPdfReady] = useState<{ url: string; filename: string } | null>(null)
+
+  // --- Board scan state ---
+  const [showBoardScan, setShowBoardScan] = useState(false)
+  const [boardScanResult, setBoardScanResult] = useState<BoardScanResult | null>(null)
 
   // --- PDF export ---
   const handleExportPdf = useCallback(async () => {
@@ -548,6 +556,86 @@ export default function InspectionCapture() {
   }, [persistCertificate])
 
   // ============================================================
+  // HANDLERS: BOARD SCAN
+  // ============================================================
+
+  const handleBoardScanComplete = useCallback((result: BoardScanResult) => {
+    setBoardScanResult(result)
+  }, [])
+
+  const handleBoardScanConfirmed = useCallback(
+    (scannedCircuits: ScannedCircuit[]) => {
+      try {
+        setCertificate((prev) => {
+          const existing = [...(prev.circuits ?? [])]
+          const dbRef = activeBoard?.dbReference ?? 'DB1'
+
+          const newCircuits: CircuitDetail[] = scannedCircuits.map((sc) => ({
+            id: crypto.randomUUID(),
+            dbId: dbRef,
+            circuitNumber: sc.circuitNumber,
+            circuitDescription: sc.circuitDescription,
+            wiringType: null,
+            referenceMethod: null,
+            numberOfPoints: null,
+            liveConductorCsa: null,
+            cpcCsa: null,
+            maxDisconnectTime: null,
+            ocpdBsEn: sc.ocpdType ? 'BS 60898' : '',
+            ocpdType: (sc.ocpdType as CircuitDetail['ocpdType']) ?? null,
+            ocpdRating: sc.ocpdRating,
+            maxPermittedZs: null,
+            breakingCapacity: null,
+            rcdBsEn: sc.rcdType ? 'BS 61008' : '',
+            rcdType: (sc.rcdType as CircuitDetail['rcdType']) ?? null,
+            rcdRating: sc.rcdRating,
+            r1: null,
+            rn: null,
+            r2: null,
+            r1r2: null,
+            r1r2OrR2: null,
+            r2Standalone: null,
+            irTestVoltage: null,
+            irLiveLive: null,
+            irLiveEarth: null,
+            zs: null,
+            polarity: 'NA' as const,
+            rcdDisconnectionTime: null,
+            rcdTestButton: 'NA' as const,
+            afddTestButton: 'NA' as const,
+            remarks: '',
+            circuitType: null,
+            status: 'INCOMPLETE' as const,
+            validationWarnings: [],
+          }))
+
+          const allCircuits = [...existing, ...newCircuits]
+          const cert = { ...prev, circuits: allCircuits, updatedAt: new Date().toISOString() }
+          persistCertificate(cert)
+          return cert
+        })
+
+        // Track each scanned circuit
+        scannedCircuits.forEach(() => {
+          trackCircuitCaptured('UNKNOWN', 'scan')
+        })
+
+        // Reset scan state
+        setShowBoardScan(false)
+        setBoardScanResult(null)
+      } catch (error) {
+        captureError(error, 'InspectionCapture.handleBoardScanConfirmed')
+      }
+    },
+    [activeBoard, persistCertificate]
+  )
+
+  const handleBoardScanCancel = useCallback(() => {
+    setShowBoardScan(false)
+    setBoardScanResult(null)
+  }, [])
+
+  // ============================================================
   // HANDLERS: OBSERVATIONS
   // ============================================================
 
@@ -858,7 +946,7 @@ export default function InspectionCapture() {
           <CircuitBoard className="w-6 h-6 text-certvoice-muted/40 mx-auto mb-2" />
           <p className="text-xs text-certvoice-muted">No circuits captured yet</p>
           <p className="text-[10px] text-certvoice-muted/60 mt-1">
-            Record by voice or type values manually
+            Record by voice, type manually, or scan the board
           </p>
         </div>
       ) : (
@@ -939,8 +1027,8 @@ export default function InspectionCapture() {
         })
       )}
 
-      {/* Add circuit buttons — voice + manual */}
-      <div className="flex gap-3">
+      {/* Add circuit buttons — voice + manual + scan */}
+      <div className="flex gap-2">
         <button
           type="button"
           onClick={() => {
@@ -950,7 +1038,7 @@ export default function InspectionCapture() {
           className="cv-btn-primary flex-1 flex items-center justify-center gap-2"
         >
           <Mic className="w-4 h-4" />
-          Record Circuit
+          Record
         </button>
         <button
           type="button"
@@ -963,7 +1051,21 @@ export default function InspectionCapture() {
                      hover:border-certvoice-accent hover:text-certvoice-accent transition-colors"
         >
           <Pencil className="w-4 h-4" />
-          Manual Entry
+          Manual
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setRecorderMode(null)
+            setShowBoardScan(true)
+            setBoardScanResult(null)
+          }}
+          className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold
+                     bg-certvoice-surface-2 border border-certvoice-border text-certvoice-text
+                     hover:border-certvoice-accent hover:text-certvoice-accent transition-colors"
+        >
+          <Camera className="w-4 h-4" />
+          Scan Board
         </button>
       </div>
 
@@ -981,6 +1083,25 @@ export default function InspectionCapture() {
             setRecorderMode(null)
             setEditingCircuitIndex(null)
           }}
+        />
+      )}
+
+      {/* Board Scan — capture phase */}
+      {showBoardScan && !boardScanResult && (
+        <BoardScanCapture
+          getToken={getToken}
+          onScanComplete={handleBoardScanComplete}
+          onCancel={handleBoardScanCancel}
+        />
+      )}
+
+      {/* Board Scan — review phase */}
+      {showBoardScan && boardScanResult && (
+        <BoardScanReview
+          boardReference={boardScanResult.boardReference || activeBoard?.dbReference || 'DB1'}
+          circuits={boardScanResult.circuits}
+          onConfirm={handleBoardScanConfirmed}
+          onCancel={handleBoardScanCancel}
         />
       )}
     </div>
