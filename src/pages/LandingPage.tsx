@@ -952,9 +952,17 @@ export default function LandingPage() {
             </div>
             <div className="mt-6 pt-6 border-t border-certvoice-border text-center">
               <p className="text-[11px] text-certvoice-muted/60">
-                &copy; {new Date().getFullYear()} Autaimate Ltd. All rights reserved.
-                CertVoice is a trading name of Autaimate Ltd. Not affiliated with
-                NICEIC, NAPIT, ELECSA, or the IET.
+                &copy; {new Date().getFullYear()}{' '}
+                <a
+                  href="https://autaimate.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-certvoice-accent transition-colors"
+                >
+                  Autaimate
+                </a>
+                . All rights reserved. CertVoice is a trading name of Autaimate.
+                Not affiliated with NICEIC, NAPIT, ELECSA, or the IET.
               </p>
             </div>
           </div>
