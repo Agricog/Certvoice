@@ -35,6 +35,7 @@ import Subscription from './pages/Subscription'
 import AuthPage from './pages/AuthPage'
 import PrivacyPolicy from './pages/PrivacyPolicy'
 import TermsOfService from './pages/TermsOfService'
+import NiceicExport from '@/pages/NiceicExport'
 // --- Component imports ---
 import BottomNav from './components/BottomNav'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -83,6 +84,7 @@ export default function App() {
           <Route path="/certificates" element={<ProtectedRoute><Certificates /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="/subscription" element={<ProtectedRoute><Subscription /></ProtectedRoute>} />
+          <Route path="/export/niceic/:certType/:id" element={<NiceicExport />} />
           {/* 404 */}
           <Route path="*" element={<NotFound />} />
         </SentryRoutes>
