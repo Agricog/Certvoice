@@ -73,7 +73,8 @@ const WORK_CATEGORIES = [
 function trackNapitEvent(action: string, label?: string): void {
   try {
     if (typeof window !== 'undefined' && 'gtag' in window) {
-      (window as Record<string, unknown>).gtag?.('event', action, {
+      const w = window as unknown as { gtag: (...args: unknown[]) => void }
+      w.gtag('event', action, {
         event_category: 'napit_export',
         event_label: label,
       })
@@ -94,16 +95,23 @@ function joinFields(pairs: [string, string | null | undefined][]): string {
     .join('\n')
 }
 
+function extractPostcode(address?: string | null): string | null {
+  if (!address) return null
+  const match = address.match(/[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}/i)
+  return match ? match[0].toUpperCase() : null
+}
+
 const EIC_SECTIONS: SectionDef[] = [
   {
     id: 'contractor',
     title: 'Contractor Details',
     format: (cert, fields) => joinFields([
       ['NAPIT Membership No', fields.napitMembershipNo],
-      ['Contractor Name', cert.declaration?.inspectorName ?? cert.contractorDetails?.contractorName ?? ''],
-      ['Trading Title', cert.contractorDetails?.contractorName ?? ''],
-      ['Address', cert.contractorDetails?.contractorAddress ?? ''],
-      ['Telephone', cert.contractorDetails?.contractorTelephone ?? ''],
+      ['Company Name', cert.declaration?.companyName ?? ''],
+      ['Inspector Name', cert.declaration?.inspectorName ?? ''],
+      ['Address', cert.declaration?.companyAddress ?? ''],
+      ['Position', cert.declaration?.position ?? ''],
+      ['Registration No', cert.declaration?.registrationNumber ?? ''],
       ['Certificate Serial No', fields.certificateSerial || cert.reportNumber || ''],
     ]),
   },
@@ -112,9 +120,9 @@ const EIC_SECTIONS: SectionDef[] = [
     title: 'Installation Address',
     format: (cert) => joinFields([
       ['Address', cert.installationDetails?.installationAddress ?? ''],
-      ['Postcode', cert.installationDetails?.installationPostcode
-        ?? extractPostcode(cert.installationDetails?.installationAddress) ?? ''],
+      ['Postcode', extractPostcode(cert.installationDetails?.installationAddress) ?? ''],
       ['Premises Type', cert.installationDetails?.premisesType ?? ''],
+      ['Occupier', cert.installationDetails?.occupier ?? ''],
     ]),
   },
   {
@@ -123,8 +131,6 @@ const EIC_SECTIONS: SectionDef[] = [
     format: (cert) => joinFields([
       ['Client Name', cert.clientDetails?.clientName ?? ''],
       ['Client Address', cert.clientDetails?.clientAddress ?? ''],
-      ['Client Telephone', cert.clientDetails?.clientTelephone ?? ''],
-      ['Client Email', cert.clientDetails?.clientEmail ?? ''],
     ]),
   },
   {
@@ -146,16 +152,6 @@ const EIC_SECTIONS: SectionDef[] = [
     },
   },
 ]
-
-// ============================================================
-// HELPERS
-// ============================================================
-
-function extractPostcode(address?: string | null): string | null {
-  if (!address) return null
-  const match = address.match(/[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}/i)
-  return match ? match[0].toUpperCase() : null
-}
 
 // ============================================================
 // COMPONENT
@@ -207,14 +203,15 @@ export default function NapitExport() {
           return
         }
 
-        setCertificate(local.data)
+        const data = local.data as Partial<EICRCertificate>
+        setCertificate(data)
 
         // Pre-fill editable fields from certificate data
         setNapitFields((prev) => ({
           ...prev,
-          certificateSerial: local.data.reportNumber ?? '',
-          completionDate: local.data.declaration?.dateInspected ?? '',
-          workDescription: local.data.extentAndLimitations?.extentCovered ?? '',
+          certificateSerial: data.reportNumber ?? '',
+          completionDate: data.declaration?.dateInspected ?? '',
+          workDescription: data.extentAndLimitations?.extentCovered ?? '',
         }))
 
         setPageState('ready')
@@ -239,7 +236,6 @@ export default function NapitExport() {
       setCopiedSections((prev) => new Set(prev).add(sectionId))
       trackNapitEvent('section_copied', sectionId)
 
-      // Reset tick after 3s
       setTimeout(() => {
         setCopiedSections((prev) => {
           const next = new Set(prev)
@@ -533,7 +529,6 @@ export default function NapitExport() {
 
           return (
             <div key={section.id} className="cv-panel overflow-hidden">
-              {/* Section header */}
               <button
                 type="button"
                 onClick={() => toggleSection(section.id)}
@@ -554,7 +549,6 @@ export default function NapitExport() {
                 )}
               </button>
 
-              {/* Section content */}
               {isExpanded && (
                 <div className="border-t border-certvoice-border p-3 space-y-2">
                   <pre className="text-xs text-certvoice-text font-mono whitespace-pre-wrap leading-relaxed bg-certvoice-surface-2 rounded-lg p-3">
