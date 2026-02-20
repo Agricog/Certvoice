@@ -35,6 +35,7 @@ import {
   Share2,
   Camera,
   FileOutput,
+  FileText,
 } from 'lucide-react'
 import type {
   EICRCertificate,
@@ -1306,6 +1307,7 @@ export default function InspectionCapture() {
             to="/dashboard"
             className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
                        text-certvoice-muted hover:text-certvoice-text hover:border-certvoice-muted transition-colors"
+            title="Back to dashboard"
           >
             <ArrowLeft className="w-4 h-4" />
           </Link>
@@ -1380,6 +1382,16 @@ export default function InspectionCapture() {
               title="Export to NICEIC"
             >
               <FileOutput className="w-4 h-4" />
+            </Link>
+          )}
+          {certificate.id && (
+            <Link
+              to={`/export/napit/eicr/${certificate.id}`}
+              className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
+                         text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors"
+              title="Notify NAPIT"
+            >
+              <FileText className="w-4 h-4" />
             </Link>
           )}
         </div>
