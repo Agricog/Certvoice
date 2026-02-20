@@ -40,6 +40,7 @@ import {
   Trash2,
   Share2,
   Ruler,
+  FileOutput,
 } from 'lucide-react'
 import type {
   EICClientDetails,
@@ -1151,6 +1152,16 @@ export default function EICCapture() {
                        text-certvoice-muted hover:text-certvoice-green hover:border-certvoice-green transition-colors">
             <Save className="w-4 h-4" />
           </button>
+          {certId && (
+            <Link
+              to={`/export/niceic/eic/${certId}`}
+              className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
+                         text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors"
+              title="Export to NICEIC"
+            >
+              <FileOutput className="w-4 h-4" />
+            </Link>
+          )}
         </div>
 
         {/* Validation warnings */}
