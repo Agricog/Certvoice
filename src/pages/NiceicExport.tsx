@@ -21,7 +21,6 @@ import {
   ExternalLink,
 } from 'lucide-react'
 import { captureError } from '@utils/errorTracking'
-import { trackEvent } from '@utils/analytics'
 import { sanitizeText } from '@utils/sanitization'
 
 import type {
@@ -32,6 +31,23 @@ import type {
   InspectionItem,
   ClassificationCode,
 } from '@/types/eicr'
+
+// ---------------------------------------------------------------------------
+// Local analytics helper — trackEvent is private in analytics.ts
+// ---------------------------------------------------------------------------
+
+function trackExportEvent(eventName: string, params?: Record<string, string | number | boolean>): void {
+  try {
+    if (typeof window !== 'undefined' && 'gtag' in window) {
+      const gtag = (window as unknown as Record<string, ((...args: unknown[]) => void) | undefined>).gtag
+      if (gtag) {
+        gtag('event', eventName, { ...params, timestamp: new Date().toISOString() })
+      }
+    }
+  } catch {
+    // Silent fail — analytics should never break the app
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -155,6 +171,7 @@ function tick(val: string | boolean | undefined | null): string {
 
 // ---------------------------------------------------------------------------
 // Section text formatters — EICR
+// All property paths match eicr.ts nested interfaces exactly
 // ---------------------------------------------------------------------------
 
 function formatNiceicDetails(nf: NiceicFields): string {
@@ -168,57 +185,62 @@ function formatNiceicDetails(nf: NiceicFields): string {
 function formatSectionA(cert: EICRCertificate): string {
   return joinFields(
     '--- SECTION A: Person Ordering the Report ---',
-    field('Client Name', cert.clientName),
-    field('Client Address', cert.clientAddress)
+    field('Client Name', cert.clientDetails.clientName),
+    field('Client Address', cert.clientDetails.clientAddress)
   )
 }
 
 function formatSectionB(cert: EICRCertificate): string {
+  const dates = cert.reportReason.inspectionDates
+  const dateStr = dates?.length ? dates.map(fmtDate).join(', ') : ''
   return joinFields(
     '--- SECTION B: Reason for Producing Report ---',
-    field('Purpose', cert.purpose),
-    field('Date(s) of Inspection', fmtDate(cert.inspectionDate))
+    field('Purpose', cert.reportReason.purpose),
+    field('Date(s) of Inspection', dateStr)
   )
 }
 
 function formatSectionC(cert: EICRCertificate): string {
+  const c = cert.installationDetails
   return joinFields(
     '--- SECTION C: Installation Details ---',
-    field('Installation Address', cert.installationAddress),
-    field('Occupier', cert.occupier),
-    field('Description of Premises', cert.premisesType),
-    field('Estimated Age of Wiring (years)', cert.estimatedAgeOfWiring),
-    field('Evidence of Additions/Alterations', cert.evidenceOfAdditions),
-    field('Additions Estimated Age (years)', cert.additionsEstimatedAge),
-    field('Installation Records Available', cert.installationRecordsAvailable),
-    field('Date of Last Inspection', fmtDate(cert.dateOfLastInspection))
+    field('Installation Address', c.installationAddress),
+    field('Occupier', c.occupier),
+    field('Description of Premises', c.premisesType),
+    field('Estimated Age of Wiring (years)', c.estimatedAgeOfWiring),
+    field('Evidence of Additions/Alterations', c.evidenceOfAdditions),
+    field('Additions Estimated Age (years)', c.additionsEstimatedAge),
+    field('Installation Records Available', c.installationRecordsAvailable),
+    field('Date of Last Inspection', fmtDate(c.dateOfLastInspection))
   )
 }
 
 function formatSectionD(cert: EICRCertificate): string {
+  const d = cert.extentAndLimitations
   return joinFields(
     '--- SECTION D: Extent and Limitations ---',
-    field('Extent Covered', cert.extentCovered),
-    field('Agreed Limitations', cert.agreedLimitations),
-    field('Agreed With', cert.agreedWith),
-    field('Operational Limitations', cert.operationalLimitations)
+    field('Extent Covered', d.extentCovered),
+    field('Agreed Limitations', d.agreedLimitations),
+    field('Agreed With', d.agreedWith),
+    field('Operational Limitations', d.operationalLimitations)
   )
 }
 
 function formatSectionE(cert: EICRCertificate): string {
   return joinFields(
     '--- SECTION E: Summary of Condition ---',
-    field('General Condition', cert.generalCondition),
-    field('Overall Assessment', cert.overallAssessment)
+    field('General Condition', cert.summaryOfCondition.generalCondition),
+    field('Overall Assessment', cert.summaryOfCondition.overallAssessment)
   )
 }
 
 function formatSectionF(cert: EICRCertificate): string {
+  const r = cert.recommendations
   return joinFields(
     '--- SECTION F: Recommendations ---',
-    field('Recommended Next Inspection', fmtDate(cert.nextInspectionDate)),
-    field('Reason for Interval', cert.reasonForInterval),
-    field('Remedial Urgency', cert.remedialUrgency)
+    field('Recommended Next Inspection', fmtDate(r.nextInspectionDate)),
+    field('Reason for Interval', r.reasonForInterval),
+    field('Remedial Urgency', r.remedialUrgency)
   )
 }
 
@@ -231,7 +253,7 @@ function formatSectionG(cert: EICRCertificate): string {
     field('Company Name', d.companyName),
     field('Position', d.position),
     field('Company Address', d.companyAddress),
-    field('Date Inspected', fmtDate(d.inspectionDate)),
+    field('Date Inspected', fmtDate(d.dateInspected)),
     field('Registration Number', d.registrationNumber),
     '',
     field('QS (Authoriser) Name', d.qsName),
@@ -242,22 +264,24 @@ function formatSectionG(cert: EICRCertificate): string {
 function formatSectionI(cert: EICRCertificate): string {
   const s = cert.supplyCharacteristics
   if (!s) return ''
+  const earthingLabel = s.earthingType ? (EARTHING_LABELS[s.earthingType] || s.earthingType) : ''
   return joinFields(
     '--- SECTION I: Supply Characteristics ---',
-    field('Earthing Type', EARTHING_LABELS[s.earthingType] || s.earthingType),
-    field('Supply', s.acDc),
+    field('Earthing Type', earthingLabel),
+    field('Supply', s.supplyType),
     field('Conductor Configuration', s.conductorConfig),
     field('Supply Polarity Confirmed', tick(s.supplyPolarityConfirmed)),
-    field('Other Sources of Supply', s.otherSourcesOfSupply),
+    field('Other Sources of Supply', s.otherSourcesPresent),
+    field('Other Sources Description', s.otherSourcesDescription),
     '',
     field('Nominal Voltage (V)', s.nominalVoltage),
     field('Nominal Frequency (Hz)', s.nominalFrequency),
-    field('Prospective Fault Current Ipf (kA)', s.prospectiveFaultCurrent),
-    field('External Earth Fault Loop Ze (ohms)', s.externalEarthFaultLoop),
+    field('Prospective Fault Current Ipf (kA)', s.ipf),
+    field('External Earth Fault Loop Ze (ohms)', s.ze),
     '',
-    field('Supply Protective Device BS(EN)', s.supplyProtectiveDeviceBsEn),
-    field('Supply Protective Device Type', s.supplyProtectiveDeviceType),
-    field('Supply Protective Device Rating (A)', s.supplyProtectiveDeviceRating)
+    field('Supply Protective Device BS(EN)', s.supplyDeviceBsEn),
+    field('Supply Protective Device Type', s.supplyDeviceType),
+    field('Supply Protective Device Rating (A)', s.supplyDeviceRating)
   )
 }
 
@@ -266,8 +290,8 @@ function formatSectionJ(cert: EICRCertificate): string {
   if (!p) return ''
   return joinFields(
     '--- SECTION J: Installation Particulars ---',
-    field("Means of Earthing — Distributor's Facility", tick(p.meansOfEarthing)),
-    field('Installation Earth Electrode', tick(p.installationEarthElectrode)),
+    field("Means of Earthing — Distributor's Facility", tick(p.distributorFacility)),
+    field('Installation Earth Electrode', tick(p.installationElectrode)),
     field('Electrode Type', p.electrodeType),
     field('Electrode Location', p.electrodeLocation),
     field('Electrode Resistance (ohms)', p.electrodeResistance),
@@ -276,12 +300,12 @@ function formatSectionJ(cert: EICRCertificate): string {
     field('Main Switch BS(EN)', p.mainSwitchBsEn),
     field('Number of Poles', p.mainSwitchPoles),
     field('Current Rating (A)', p.mainSwitchCurrentRating),
-    field('Fuse/Device Rating (A)', p.mainSwitchFuseRating),
+    field('Fuse/Device Rating (A)', p.mainSwitchDeviceRating),
     field('Voltage Rating (V)', p.mainSwitchVoltageRating),
     field('RCD Type (if applicable)', p.mainSwitchRcdType),
     field('Rated Residual Current (mA)', p.mainSwitchRcdRating),
     field('Rated Time Delay (ms)', p.mainSwitchRcdTimeDelay),
-    field('Measured Operating Time (ms)', p.mainSwitchRcdOperatingTime),
+    field('Measured Operating Time (ms)', p.mainSwitchRcdMeasuredTime),
     '',
     field('Earthing Conductor Material', p.earthingConductorMaterial),
     field('Earthing Conductor CSA (mm2)', p.earthingConductorCsa),
@@ -294,9 +318,10 @@ function formatSectionJ(cert: EICRCertificate): string {
     field('Bonded to Water', tick(p.bondingWater)),
     field('Bonded to Gas', tick(p.bondingGas)),
     field('Bonded to Oil', tick(p.bondingOil)),
-    field('Bonded to Structural Steel', tick(p.bondingStructuralSteel)),
-    field('Bonded to Lightning Protection', tick(p.bondingLightningProtection)),
-    field('Bonded to Other', p.bondingOther)
+    field('Bonded to Structural Steel', tick(p.bondingSteel)),
+    field('Bonded to Lightning Protection', tick(p.bondingLightning)),
+    field('Bonded to Other', p.bondingOther),
+    field('Bonded Other Description', p.bondingOtherDescription)
   )
 }
 
@@ -311,7 +336,7 @@ function formatSectionK(observations: Observation[]): string {
       field('  DB Reference', obs.dbReference),
       field('  Circuit Reference', obs.circuitReference),
       field('  Description', obs.observationText),
-      field('  Regulation', obs.regulationRef),
+      field('  Regulation', obs.regulationReference),
       field('  Remedial Action', obs.remedialAction)
     )
   })
@@ -332,7 +357,7 @@ function formatBoards(boards: DistributionBoardHeader[]): string {
       field('  SPD Type', b.spdType),
       field('  SPD Status Confirmed', tick(b.spdStatusConfirmed)),
       field('  Polarity Confirmed', tick(b.polarityConfirmed)),
-      field('  Phase Sequence Confirmed', tick(b.phaseSequence)),
+      field('  Phase Sequence Confirmed', tick(b.phaseSequenceConfirmed)),
       field('  Zs at DB (ohms)', b.zsAtDb),
       field('  Ipf at DB (kA)', b.ipfAtDb)
     )
@@ -341,10 +366,11 @@ function formatBoards(boards: DistributionBoardHeader[]): string {
 }
 
 function formatCircuit(c: CircuitDetail, idx: number): string {
+  const wiringLabel = c.wiringType ? (WIRING_LABELS[c.wiringType] || c.wiringType) : ''
   return joinFields(
     `Circuit ${c.circuitNumber || idx + 1}: ${c.circuitDescription || ''}`,
-    field('  Board', c.boardReference),
-    field('  Wiring Type', WIRING_LABELS[c.wiringType] || c.wiringType),
+    field('  Board ID', c.dbId),
+    field('  Wiring Type', wiringLabel),
     field('  Ref Method', c.referenceMethod),
     field('  Points', c.numberOfPoints),
     field('  Live CSA (mm2)', c.liveConductorCsa),
@@ -363,12 +389,12 @@ function formatCircuit(c: CircuitDetail, idx: number): string {
     field('  rn (ohms)', c.rn),
     field('  r2 (ohms)', c.r2),
     field('  R1+R2 (ohms)', c.r1r2),
-    field('  Test Voltage (V)', c.testVoltage),
+    field('  Test Voltage (V)', c.irTestVoltage),
     field('  IR L-L (Mohms)', c.irLiveLive),
     field('  IR L-E (Mohms)', c.irLiveEarth),
     field('  Zs (ohms)', c.zs),
     field('  Polarity', tick(c.polarity)),
-    field('  RCD Time (ms)', c.rcdTime),
+    field('  RCD Time (ms)', c.rcdDisconnectionTime),
     field('  RCD Test Button', tick(c.rcdTestButton)),
     field('  AFDD Test Button', tick(c.afddTestButton)),
     field('  Remarks', c.remarks)
@@ -388,7 +414,7 @@ function formatInspection(items: InspectionItem[]): string {
   const nonNa = items.filter((it) => it.outcome && it.outcome !== 'NA')
   if (!nonNa.length) return 'All inspection items: N/A or not recorded.'
   const lines = nonNa.map(
-    (it) => `${it.section}.${it.itemNumber} ${it.description}: ${it.outcome}`
+    (it) => `${it.itemRef} ${it.description}: ${it.outcome}`
   )
   return '--- Schedule of Inspections ---\n' + lines.join('\n')
 }
@@ -419,36 +445,37 @@ function formatEicPart1(cert: EICRCertificate): string {
     field('Contractor Address', d?.companyAddress),
     field('Registration Number', d?.registrationNumber),
     '',
-    field('Client Name', cert.clientName),
-    field('Client Address', cert.clientAddress),
+    field('Client Name', cert.clientDetails.clientName),
+    field('Client Address', cert.clientDetails.clientAddress),
     '',
-    field('Installation Address', cert.installationAddress),
-    field('Occupier', cert.occupier),
-    field('Description of Premises', cert.premisesType)
+    field('Installation Address', cert.installationDetails.installationAddress),
+    field('Occupier', cert.installationDetails.occupier),
+    field('Description of Premises', cert.installationDetails.premisesType)
   )
 }
 
 function formatEicPart2(cert: EICRCertificate): string {
+  const ext = cert.extentAndLimitations
   return joinFields(
     '--- PART 2: Description and Extent of Work ---',
-    field('Description of Installation', cert.extentCovered),
-    field('Extent Covered', cert.extentCovered),
-    field('Agreed Limitations', cert.agreedLimitations),
-    field('Operational Limitations', cert.operationalLimitations)
+    field('Description of Installation', ext.extentCovered),
+    field('Extent Covered', ext.extentCovered),
+    field('Agreed Limitations', ext.agreedLimitations),
+    field('Operational Limitations', ext.operationalLimitations)
   )
 }
 
 function formatEicPart5(cert: EICRCertificate): string {
   return joinFields(
     '--- PART 5: Comments on Existing Installation ---',
-    field('General Condition', cert.generalCondition)
+    field('General Condition', cert.summaryOfCondition.generalCondition)
   )
 }
 
 function formatEicPart6(cert: EICRCertificate): string {
   const d = cert.declaration
   // EIC has typeData with design/construction/inspection signatories
-  const td = (cert as Record<string, unknown>).typeData as Record<string, unknown> | undefined
+  const td = (cert as unknown as Record<string, unknown>).typeData as Record<string, unknown> | undefined
   return joinFields(
     '--- PART 6: Declaration ---',
     'Design:',
@@ -464,7 +491,7 @@ function formatEicPart6(cert: EICRCertificate): string {
     'Inspection & Testing:',
     field('  Inspector Name', d?.inspectorName),
     field('  Inspector Position', d?.position),
-    field('  Inspection Date', fmtDate(d?.inspectionDate)),
+    field('  Inspection Date', fmtDate(d?.dateInspected)),
     '',
     field('Company Name', d?.companyName),
     field('Company Address', d?.companyAddress),
@@ -674,7 +701,7 @@ export default function NiceicExport() {
   const type: CertType = certType === 'eic' ? 'eic' : 'eicr'
   const sections = type === 'eic' ? EIC_SECTIONS : EICR_SECTIONS
 
-  // Certificate data — loaded from IndexedDB or API
+  // Certificate data — loaded from IndexedDB
   const [cert, setCert] = useState<EICRCertificate | null>(null)
   const [circuits, setCircuits] = useState<CircuitDetail[]>([])
   const [observations, setObservations] = useState<Observation[]>([])
@@ -699,7 +726,9 @@ export default function NiceicExport() {
   const progressPercent = Math.round((copiedCount / totalSections) * 100)
 
   // -----------------------------------------------------------------------
-  // Load certificate data
+  // Load certificate data from IndexedDB (offline-first)
+  // offlineStore.getCertificate returns StoredCertificate { id, data, ... }
+  // where data is Partial<EICRCertificate>
   // -----------------------------------------------------------------------
 
   useEffect(() => {
@@ -711,29 +740,29 @@ export default function NiceicExport() {
       }
 
       try {
-        // Try loading from IndexedDB first (offline-first pattern)
-        const { getCertificateById } = await import('@/services/offlineStore')
-        const stored = await getCertificateById(id)
+        const { getCertificate } = await import('@/services/offlineStore')
+        const stored = await getCertificate(id)
 
-        if (stored) {
-          setCert(stored.certificate as EICRCertificate)
-          setCircuits(stored.circuits || [])
-          setObservations(stored.observations || [])
-          setBoards(stored.distributionBoards || [])
-          setInspectionItems(stored.inspectionItems || [])
+        if (stored && stored.data) {
+          const certData = stored.data as EICRCertificate
+          setCert(certData)
+          setCircuits(certData.circuits || [])
+          setObservations(certData.observations || [])
+          setBoards(certData.distributionBoards || [])
+          setInspectionItems(certData.inspectionSchedule || [])
 
           // Pre-fill NICEIC reg number from declaration if available
-          if (stored.certificate?.declaration?.registrationNumber) {
+          if (certData.declaration?.registrationNumber) {
             setNiceicFields((prev) => ({
               ...prev,
-              registrationNumber: stored.certificate.declaration.registrationNumber,
+              registrationNumber: certData.declaration.registrationNumber,
             }))
           }
           // Pre-fill contractor ref from report number
-          if (stored.certificate?.reportNumber) {
+          if (certData.reportNumber) {
             setNiceicFields((prev) => ({
               ...prev,
-              contractorRef: stored.certificate.reportNumber,
+              contractorRef: certData.reportNumber,
             }))
           }
         } else {
@@ -767,12 +796,11 @@ export default function NiceicExport() {
           setCopyState((prev) => ({ ...prev, [sectionId]: 'idle' }))
         }, 3000)
 
-        trackEvent('niceic_export_copy', {
+        trackExportEvent('niceic_export_copy', {
           section: sectionId,
           cert_type: type,
         })
       } catch (err) {
-        // Fallback: select text for manual copy
         captureError(err, 'NiceicExport.handleCopy')
       }
     },
@@ -804,7 +832,7 @@ export default function NiceicExport() {
       setCopyState({})
     }, 3000)
 
-    trackEvent('niceic_export_copy_all', { cert_type: type })
+    trackExportEvent('niceic_export_copy_all', { cert_type: type })
   }, [cert, type, sections, handleCopy])
 
   // -----------------------------------------------------------------------
@@ -904,7 +932,7 @@ export default function NiceicExport() {
                 NICEIC Portal Export — {certLabel}
               </h1>
               <p className="text-xs text-[#7A8494] truncate">
-                {cert.installationAddress || cert.clientName || 'Certificate'}
+                {cert.installationDetails.installationAddress || cert.clientDetails.clientName || 'Certificate'}
               </p>
             </div>
 
