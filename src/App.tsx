@@ -86,21 +86,6 @@ export default function App() {
           {/* 404 */}
           <Route path="*" element={<NotFound />} />
         </SentryRoutes>
-
-        {/* Footer attribution */}
-        <div className="border-t border-certvoice-border py-4 px-4 text-center space-y-1">
-          <p className="text-xs text-certvoice-muted">
-            &copy; 2026 Autaimate. All rights reserved. CertVoice is a trading name of Autaimate. Not affiliated with NICEIC, NAPIT, ELECSA, or the IET.
-          </p>
-          <a
-            href="https://autaimate.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-certvoice-muted hover:text-certvoice-accent transition-colors"
-          >
-            Built by Autaimate
-          </a>
-        </div>
       </div>
       {/* Fixed bottom navigation — auto-hides on public + auth pages */}
       <BottomNav />
