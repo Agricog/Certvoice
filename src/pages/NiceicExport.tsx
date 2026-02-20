@@ -1,7 +1,7 @@
 // src/pages/NiceicExport.tsx
-// NICEIC Portal Export — Structured copy-paste view matching NOCS field order
+// NICEIC Portal Export — Structured copy-paste view for NOCS portal
 // Supports EICR (Sections A-K) and EIC (Parts 1-6) certificate types
-// Path 3 integration: zero ToS risk, no automation, just smart formatting
+// Path 1 integration: no automation, low policy risk — smart formatting for manual paste
 
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
@@ -78,6 +78,7 @@ const EICR_SECTIONS = [
   { id: 'sectionE', label: 'Section E — Summary of Condition', icon: AlertTriangle },
   { id: 'sectionF', label: 'Section F — Recommendations', icon: FileText },
   { id: 'sectionG', label: 'Section G — Declaration', icon: FileText },
+  { id: 'sectionH', label: 'Section H — Summary of the Inspection', icon: ClipboardList },
   { id: 'sectionI', label: 'Section I — Supply Characteristics', icon: Zap },
   { id: 'sectionJ', label: 'Section J — Installation Particulars', icon: Settings },
   { id: 'sectionK', label: 'Section K — Observations', icon: AlertTriangle },
@@ -101,11 +102,11 @@ const EIC_SECTIONS = [
   { id: 'instruments', label: 'Test Instruments', icon: Settings },
 ] as const
 
-// Earthing type display values
+// Earthing type display values — keys match EarthingType enum: TNC | TNS | TNCS | TT | IT
 const EARTHING_LABELS: Record<string, string> = {
-  TN_C: 'TN-C',
-  TN_S: 'TN-S',
-  TN_C_S: 'TN-C-S',
+  TNC: 'TN-C',
+  TNS: 'TN-S',
+  TNCS: 'TN-C-S',
   TT: 'TT',
   IT: 'IT',
 }
@@ -159,6 +160,14 @@ function fmtDate(date: string | undefined | null): string {
   } catch {
     return date
   }
+}
+
+/** Bonding status display — uses SATISFACTORY/UNSATISFACTORY/NA not booleans */
+function bonding(val: string | boolean | undefined | null): string {
+  if (val === 'SATISFACTORY' || val === true) return 'Satisfactory'
+  if (val === 'UNSATISFACTORY' || val === false) return 'Unsatisfactory'
+  if (val === 'NA') return 'N/A'
+  return String(val || '')
 }
 
 /** Tick/cross display */
@@ -261,6 +270,15 @@ function formatSectionG(cert: EICRCertificate): string {
   )
 }
 
+function formatSectionH(cert: EICRCertificate): string {
+  const s = cert.summaryOfCondition
+  return joinFields(
+    '--- SECTION H: Summary of the Inspection ---',
+    field('General Condition', s.generalCondition),
+    field('Overall Assessment', s.overallAssessment)
+  )
+}
+
 function formatSectionI(cert: EICRCertificate): string {
   const s = cert.supplyCharacteristics
   if (!s) return ''
@@ -315,11 +333,11 @@ function formatSectionJ(cert: EICRCertificate): string {
     field('Main Bonding Conductor CSA (mm2)', p.bondingConductorCsa),
     field('Main Bonding Connection Verified', tick(p.bondingConductorVerified)),
     '',
-    field('Bonded to Water', tick(p.bondingWater)),
-    field('Bonded to Gas', tick(p.bondingGas)),
-    field('Bonded to Oil', tick(p.bondingOil)),
-    field('Bonded to Structural Steel', tick(p.bondingSteel)),
-    field('Bonded to Lightning Protection', tick(p.bondingLightning)),
+    field('Bonded to Water', bonding(p.bondingWater)),
+    field('Bonded to Gas', bonding(p.bondingGas)),
+    field('Bonded to Oil', bonding(p.bondingOil)),
+    field('Bonded to Structural Steel', bonding(p.bondingSteel)),
+    field('Bonded to Lightning Protection', bonding(p.bondingLightning)),
     field('Bonded to Other', p.bondingOther),
     field('Bonded Other Description', p.bondingOtherDescription)
   )
@@ -727,8 +745,6 @@ export default function NiceicExport() {
 
   // -----------------------------------------------------------------------
   // Load certificate data from IndexedDB (offline-first)
-  // offlineStore.getCertificate returns StoredCertificate { id, data, ... }
-  // where data is Partial<EICRCertificate>
   // -----------------------------------------------------------------------
 
   useEffect(() => {
@@ -852,6 +868,7 @@ export default function NiceicExport() {
         { id: 'sectionE', text: formatSectionE(cert) },
         { id: 'sectionF', text: formatSectionF(cert) },
         { id: 'sectionG', text: formatSectionG(cert) },
+        { id: 'sectionH', text: formatSectionH(cert) },
         { id: 'sectionI', text: formatSectionI(cert) },
         { id: 'sectionJ', text: formatSectionJ(cert) },
         { id: 'sectionK', text: formatSectionK(observations) },
@@ -1047,8 +1064,8 @@ export default function NiceicExport() {
           {/* Footer */}
           <div className="pt-6 pb-10 text-center space-y-3">
             <p className="text-xs text-[#4A5568]">
-              Data formatted for NICEIC NOCS portal (nocs.niceic.com). Fields follow BS
-              7671:2018+A2:2022 Appendix 6 section order.
+              Formatted to follow BS 7671:2018+A2:2022 Appendix 6 section order, designed for
+              quick pasting into NOCS.
             </p>
             <Link
               to={`/capture/${type === 'eic' ? 'eic/' : ''}${id}`}
