@@ -23,6 +23,7 @@ import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useLocation, useParams, useNavigate, Link } from 'react-router-dom'
 import { useApiToken } from '../hooks/useApiToken'
 import { Helmet } from 'react-helmet-async'
+import { generateEICBlobUrl } from '../services/eicPdfGenerator'
 import {
   ArrowLeft,
   Zap,
