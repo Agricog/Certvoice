@@ -34,6 +34,7 @@ import {
   Trash2,
   Share2,
   Camera,
+  FileOutput,
 } from 'lucide-react'
 import type {
   EICRCertificate,
@@ -1371,6 +1372,16 @@ export default function InspectionCapture() {
           >
             <Save className="w-4 h-4" />
           </button>
+          {certificate.id && (
+            <Link
+              to={`/export/niceic/eicr/${certificate.id}`}
+              className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
+                         text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors"
+              title="Export to NICEIC"
+            >
+              <FileOutput className="w-4 h-4" />
+            </Link>
+          )}
         </div>
 
         {/* ---- Overall Status ---- */}
