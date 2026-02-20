@@ -906,7 +906,7 @@ export default function LandingPage() {
                 <Zap className="w-5 h-5 text-certvoice-accent" aria-hidden="true" />
                 <span className="text-sm font-bold text-certvoice-text">CertVoice</span>
                 <span className="text-xs text-certvoice-muted">
-                  by{' '}
+                  Built by{' '}
                   <a
                     href="https://autaimate.com"
                     target="_blank"
