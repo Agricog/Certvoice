@@ -42,6 +42,7 @@ import {
   Share2,
   Ruler,
   FileOutput,
+  FileText,
 } from 'lucide-react'
 import type {
   EICClientDetails,
@@ -190,8 +191,8 @@ export default function EICCapture() {
   const [editingCircuitIndex, setEditingCircuitIndex] = useState<number | null>(null)
   const [editingBoardIndex, setEditingBoardIndex] = useState<number | null>(null)
   const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set())
-  const [isExporting, _setIsExporting] = useState(false)
-  const [pdfReady, _setPdfReady] = useState<{ url: string; filename: string } | null>(null)
+  const [isExporting, setIsExporting] = useState(false)
+  const [pdfReady, setPdfReady] = useState<{ url: string; filename: string } | null>(null)
 
   // --- Typed accessors ---
   const certId = certData.id as string | undefined
@@ -603,9 +604,18 @@ export default function EICCapture() {
   // ============================================================
 
   const handleExportPdf = useCallback(async () => {
-    // TODO: Wire to EIC PDF generator (eicPdf.ts)
-    alert('EIC PDF generation coming soon')
-  }, [])
+    if (isExporting || !certData.id) return
+    setIsExporting(true)
+    try {
+      if (pdfReady?.url) URL.revokeObjectURL(pdfReady.url)
+      const result = await generateEICBlobUrl(certData as unknown as import('../types/eic').EICCertificate)
+      setPdfReady(result)
+    } catch (err) {
+      captureError(err, 'EICCapture.handleExportPdf')
+    } finally {
+      setIsExporting(false)
+    }
+  }, [isExporting, certData, pdfReady])
 
   const handleSharePdf = useCallback(async () => {
     if (!pdfReady) return
@@ -1109,6 +1119,7 @@ export default function EICCapture() {
             to="/dashboard"
             className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
                        text-certvoice-muted hover:text-certvoice-text hover:border-certvoice-muted transition-colors"
+            title="Back to dashboard"
           >
             <ArrowLeft className="w-4 h-4" />
           </Link>
@@ -1130,11 +1141,13 @@ export default function EICCapture() {
           {pdfReady ? (
             <>
               <a href={pdfReady.url} download={pdfReady.filename}
+                title="Download PDF"
                 className="w-8 h-8 rounded-lg border border-certvoice-green flex items-center justify-center
                            text-certvoice-green hover:bg-certvoice-green/10 transition-colors animate-pulse">
                 <Download className="w-4 h-4" />
               </a>
               <button type="button" onClick={handleSharePdf}
+                title="Share PDF"
                 className="w-8 h-8 rounded-lg border border-certvoice-accent flex items-center justify-center
                            text-certvoice-accent hover:bg-certvoice-accent/10 transition-colors">
                 <Share2 className="w-4 h-4" />
@@ -1142,6 +1155,7 @@ export default function EICCapture() {
             </>
           ) : (
             <button type="button" onClick={handleExportPdf} disabled={isExporting}
+              title="Generate PDF"
               className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
                          text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors
                          disabled:opacity-50 disabled:cursor-not-allowed">
@@ -1149,6 +1163,7 @@ export default function EICCapture() {
             </button>
           )}
           <button type="button" onClick={handleSave}
+            title="Save certificate"
             className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
                        text-certvoice-muted hover:text-certvoice-green hover:border-certvoice-green transition-colors">
             <Save className="w-4 h-4" />
@@ -1161,6 +1176,16 @@ export default function EICCapture() {
               title="Export to NICEIC"
             >
               <FileOutput className="w-4 h-4" />
+            </Link>
+          )}
+          {certId && (
+            <Link
+              to={`/export/napit/eic/${certId}`}
+              className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
+                         text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors"
+              title="Notify NAPIT"
+            >
+              <FileText className="w-4 h-4" />
             </Link>
           )}
         </div>
