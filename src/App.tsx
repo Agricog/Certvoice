@@ -36,6 +36,7 @@ import AuthPage from './pages/AuthPage'
 import PrivacyPolicy from './pages/PrivacyPolicy'
 import TermsOfService from './pages/TermsOfService'
 import NiceicExport from '@/pages/NiceicExport'
+import NapitExport from '@/pages/NapitExport'
 // --- Component imports ---
 import BottomNav from './components/BottomNav'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -85,6 +86,7 @@ export default function App() {
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="/subscription" element={<ProtectedRoute><Subscription /></ProtectedRoute>} />
           <Route path="/export/niceic/:certType/:id" element={<NiceicExport />} />
+          <Route path="/export/napit/:certType/:id" element={<NapitExport />} />
           {/* 404 */}
           <Route path="*" element={<NotFound />} />
         </SentryRoutes>
