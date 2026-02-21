@@ -16,6 +16,10 @@
  * Rate limit: 30 requests/hour per engineer via Upstash.
  * Guard: requestId, structured logs, safety switches per Build Standard v3.
  *
+ * Clerk metadata sync: Webhook updates Clerk publicMetadata so the frontend
+ * trial gate (ProtectedRoute / useTrialStatus) reflects subscription status
+ * without needing a page refresh or separate API call.
+ *
  * Deploy: wrangler deploy (separate from Railway frontend)
  *
  * @module workers/stripe-subscription
@@ -35,6 +39,7 @@ interface Env {
   DATABASE_URL: string
   ALLOWED_ORIGIN: string
   CLERK_JWKS_URL: string
+  CLERK_SECRET_KEY: string          // ← NEW: for updating publicMetadata
   STRIPE_SECRET_KEY: string
   STRIPE_WEBHOOK_SECRET: string
   STRIPE_PRICE_ID_SOLO: string
@@ -244,6 +249,107 @@ async function markEventProcessed(eventId: string, env: Env): Promise<void> {
     await redis.set(`certvoice:webhook:${eventId}`, '1', { ex: 96 * 3600 })
   } catch {
     // Non-critical — worst case is a duplicate process
+  }
+}
+
+// ============================================================
+// CLERK METADATA SYNC
+// ============================================================
+// When Stripe subscription status changes, update Clerk
+// publicMetadata so the frontend trial gate (ProtectedRoute /
+// useTrialStatus) reflects the change immediately on next
+// page load — no separate subscription API call needed.
+//
+// Clerk Backend API: PATCH /v1/users/{user_id}
+// Docs: https://clerk.com/docs/reference/backend-api/tag/Users#operation/UpdateUser
+//
+// IMPORTANT: This merges with existing publicMetadata.
+// Existing fields (betaTester, trialEndsAt, lifetimePrice) are preserved.
+// ============================================================
+
+async function updateClerkMetadata(
+  clerkUserId: string,
+  metadata: Record<string, unknown>,
+  env: Env,
+  requestId: string
+): Promise<void> {
+  try {
+    const response = await fetch(
+      `https://api.clerk.com/v1/users/${clerkUserId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${env.CLERK_SECRET_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          public_metadata: metadata,
+        }),
+      }
+    )
+
+    if (!response.ok) {
+      const errorBody = await response.text()
+      structuredLog({
+        requestId,
+        route: '/api/stripe/webhook',
+        method: 'POST',
+        status: response.status,
+        latencyMs: 0,
+        userId: clerkUserId,
+        error: `Clerk metadata update failed: ${response.status} ${errorBody}`,
+      })
+    } else {
+      structuredLog({
+        requestId,
+        route: '/api/stripe/webhook',
+        method: 'POST',
+        status: 200,
+        latencyMs: 0,
+        userId: clerkUserId,
+        message: `Clerk metadata updated: subscriptionActive=${metadata.subscriptionActive}`,
+      })
+    }
+  } catch (error) {
+    // Non-blocking — Neon is source of truth, Clerk is for fast client reads
+    structuredLog({
+      requestId,
+      route: '/api/stripe/webhook',
+      method: 'POST',
+      status: 500,
+      latencyMs: 0,
+      userId: clerkUserId,
+      error: `Clerk metadata update exception: ${error instanceof Error ? error.message : 'unknown'}`,
+    })
+  }
+}
+
+/**
+ * Resolve Clerk user ID from Stripe customer ID.
+ * Checks subscription metadata first (set during checkout),
+ * falls back to Neon lookup.
+ */
+async function resolveClerkUserId(
+  stripeCustomerId: string,
+  subscriptionMetadata: Record<string, string> | undefined,
+  env: Env
+): Promise<string | null> {
+  // 1. Check subscription metadata (set during checkout)
+  if (subscriptionMetadata?.clerk_user_id) {
+    return subscriptionMetadata.clerk_user_id
+  }
+
+  // 2. Fallback: look up in Neon
+  try {
+    const sql = neon(env.DATABASE_URL)
+    const rows = await sql`
+      SELECT clerk_user_id FROM engineers
+      WHERE stripe_customer_id = ${stripeCustomerId}
+      LIMIT 1
+    `
+    return (rows[0]?.clerk_user_id as string) ?? null
+  } catch {
+    return null
   }
 }
 
@@ -558,10 +664,16 @@ async function handleBillingPortal(
 
 /**
  * POST /api/stripe/webhook
- * Handles Stripe webhook events to keep Neon in sync.
+ * Handles Stripe webhook events to keep Neon AND Clerk in sync.
  * No Clerk auth — uses Stripe signature verification.
  * Idempotent — duplicate event IDs are skipped via Upstash Redis.
- * Now extracts plan_tier from subscription metadata.
+ *
+ * Flow per event:
+ *   1. Verify Stripe signature
+ *   2. Check idempotency (skip duplicates)
+ *   3. Update Neon (source of truth)
+ *   4. Update Clerk publicMetadata (for fast client-side trial gate reads)
+ *   5. Mark event as processed
  */
 async function handleWebhook(
   request: Request,
@@ -629,6 +741,7 @@ async function handleWebhook(
         }
       }
 
+      // Step 1: Update Neon (source of truth)
       await sql`
         UPDATE engineers
         SET subscription_status = ${status},
@@ -637,29 +750,82 @@ async function handleWebhook(
             plan_tier = ${resolvedTier}
         WHERE stripe_customer_id = ${customerId}
       `
+
+      // Step 2: Update Clerk publicMetadata (for frontend trial gate)
+      const clerkUserId = await resolveClerkUserId(customerId, metadata, env)
+      if (clerkUserId) {
+        const isActive = status === 'active' || status === 'trialing'
+        await updateClerkMetadata(
+          clerkUserId,
+          {
+            subscriptionActive: isActive,
+            subscriptionStatus: status,
+            planTier: resolvedTier,
+            // Extend trialEndsAt to match Stripe trial end if trialing
+            ...(status === 'trialing' && trialEnd ? { trialEndsAt: trialEnd } : {}),
+          },
+          env,
+          requestId
+        )
+      }
+
       break
     }
 
     case 'customer.subscription.deleted': {
       const customerId = obj.customer as string
+      const metadata = (obj.metadata ?? {}) as Record<string, string>
 
+      // Step 1: Update Neon
       await sql`
         UPDATE engineers
         SET subscription_status = 'canceled',
             current_period_end = NULL
         WHERE stripe_customer_id = ${customerId}
       `
+
+      // Step 2: Update Clerk — revoke access
+      const clerkUserId = await resolveClerkUserId(customerId, metadata, env)
+      if (clerkUserId) {
+        await updateClerkMetadata(
+          clerkUserId,
+          {
+            subscriptionActive: false,
+            subscriptionStatus: 'canceled',
+          },
+          env,
+          requestId
+        )
+      }
+
       break
     }
 
     case 'invoice.payment_failed': {
       const customerId = obj.customer as string
 
+      // Step 1: Update Neon
       await sql`
         UPDATE engineers
         SET subscription_status = 'past_due'
         WHERE stripe_customer_id = ${customerId}
       `
+
+      // Step 2: Update Clerk — flag past_due (still has access but warned)
+      // Invoice doesn't have subscription metadata, so lookup from Neon
+      const clerkUserId = await resolveClerkUserId(customerId, undefined, env)
+      if (clerkUserId) {
+        await updateClerkMetadata(
+          clerkUserId,
+          {
+            subscriptionActive: true, // Still has access during grace period
+            subscriptionStatus: 'past_due',
+          },
+          env,
+          requestId
+        )
+      }
+
       break
     }
 
