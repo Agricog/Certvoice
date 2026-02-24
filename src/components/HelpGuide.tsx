@@ -350,14 +350,14 @@ const DEFAULT_HELP: PageHelp = {
 // ============================================================
 
 function getHelpForRoute(pathname: string): PageHelp {
-  if (pathname === '/dashboard' || pathname === '/') return HELP_CONTENT.dashboard
-  if (pathname === '/new') return HELP_CONTENT.new
-  if (pathname.startsWith('/inspect/')) return HELP_CONTENT.inspect
-  if (pathname.startsWith('/minor-works/')) return HELP_CONTENT['minor-works']
-  if (pathname.startsWith('/eic/')) return HELP_CONTENT.eic
-  if (pathname === '/certificates') return HELP_CONTENT.certificates
-  if (pathname === '/settings') return HELP_CONTENT.settings
-  if (pathname === '/subscription') return HELP_CONTENT.subscription
+  if (pathname === '/dashboard' || pathname === '/') return HELP_CONTENT['dashboard'] ?? DEFAULT_HELP
+  if (pathname === '/new') return HELP_CONTENT['new'] ?? DEFAULT_HELP
+  if (pathname.startsWith('/inspect/')) return HELP_CONTENT['inspect'] ?? DEFAULT_HELP
+  if (pathname.startsWith('/minor-works/')) return HELP_CONTENT['minor-works'] ?? DEFAULT_HELP
+  if (pathname.startsWith('/eic/')) return HELP_CONTENT['eic'] ?? DEFAULT_HELP
+  if (pathname === '/certificates') return HELP_CONTENT['certificates'] ?? DEFAULT_HELP
+  if (pathname === '/settings') return HELP_CONTENT['settings'] ?? DEFAULT_HELP
+  if (pathname === '/subscription') return HELP_CONTENT['subscription'] ?? DEFAULT_HELP
   return DEFAULT_HELP
 }
 
