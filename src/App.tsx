@@ -40,6 +40,7 @@ import NapitExport from '@/pages/NapitExport'
 // --- Component imports ---
 import BottomNav from './components/BottomNav'
 import ProtectedRoute from './components/ProtectedRoute'
+import HelpGuide from './components/HelpGuide'
 // --- Sentry-wrapped Routes for performance monitoring ---
 const SentryRoutes = Sentry.withSentryReactRouterV6Routing(Routes)
 // ============================================================
@@ -91,6 +92,8 @@ export default function App() {
           <Route path="*" element={<NotFound />} />
         </SentryRoutes>
       </div>
+      {/* Floating help button — context-aware instructions per page */}
+      <HelpGuide />
       {/* Fixed bottom navigation — auto-hides on public + auth pages */}
       <BottomNav />
     </BrowserRouter>
