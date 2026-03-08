@@ -3,15 +3,16 @@
  *
  * Structured copy-paste interface for NAPIT Online portal notifications.
  * NAPIT has NO public API — this is a "smart clipboard" approach matching
- * the portal field order so electricians can copy each section and paste.
+ * the portal field order so electricians can copy each field individually
+ * and paste directly into napitonline.co.uk.
  *
  * NOTE: Only EIC and notifiable Minor Works require Part P notification.
- * EICRs do NOT require notification to NAPIT/NICEIC/Building Control.
+ * EICRs do NOT require notification to NAPIT/Building Control.
  *
  * @module pages/NapitExport
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { Helmet } from 'react-helmet-async'
 import {
@@ -25,6 +26,12 @@ import {
   ExternalLink,
   Info,
   Zap,
+  MapPin,
+  User,
+  Calendar,
+  FileText,
+  Mail,
+  Hash,
 } from 'lucide-react'
 import { getCertificate } from '../services/offlineStore'
 import { captureError } from '../utils/errorTracking'
@@ -36,12 +43,8 @@ import type { EICRCertificate } from '../types/eicr'
 
 type CertType = 'eicr' | 'eic' | 'minorworks'
 type PageState = 'loading' | 'ready' | 'error' | 'not-applicable'
-
-interface SectionDef {
-  id: string
-  title: string
-  format: (cert: Partial<EICRCertificate>, fields: NapitFields) => string
-}
+type DeliveryMethod = 'electronic' | 'postal'
+type CopyState = Record<string, 'idle' | 'copied'>
 
 interface NapitFields {
   napitMembershipNo: string
@@ -49,10 +52,13 @@ interface NapitFields {
   workCategory: string
   workDescription: string
   completionDate: string
+  customerEmail: string
+  numberOfAccessories: string
+  deliveryMethod: DeliveryMethod
 }
 
 // ============================================================
-// WORK CATEGORIES (NAPIT Part P notification)
+// WORK CATEGORIES (NAPIT Part P notification — Works Bar)
 // ============================================================
 
 const WORK_CATEGORIES = [
@@ -67,17 +73,14 @@ const WORK_CATEGORIES = [
 ] as const
 
 // ============================================================
-// ANALYTICS HELPER (gtag not exported from analytics.ts)
+// ANALYTICS HELPER
 // ============================================================
 
 function trackNapitEvent(action: string, label?: string): void {
   try {
     if (typeof window !== 'undefined' && 'gtag' in window) {
       const w = window as unknown as { gtag: (...args: unknown[]) => void }
-      w.gtag('event', action, {
-        event_category: 'napit_export',
-        event_label: label,
-      })
+      w.gtag('event', action, { event_category: 'napit_export', event_label: label })
     }
   } catch {
     // Analytics must never break functionality
@@ -85,76 +88,129 @@ function trackNapitEvent(action: string, label?: string): void {
 }
 
 // ============================================================
-// SECTION FORMATTERS
+// HELPERS
 // ============================================================
 
-function joinFields(pairs: [string, string | null | undefined][]): string {
-  return pairs
-    .filter(([, v]) => v !== null && v !== undefined && v !== '')
-    .map(([label, value]) => `${label}: ${value}`)
-    .join('\n')
-}
-
-function extractPostcode(address?: string | null): string | null {
-  if (!address) return null
+function extractPostcode(address?: string | null): string {
+  if (!address) return ''
   const match = address.match(/[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}/i)
-  return match ? match[0].toUpperCase() : null
+  return match ? match[0].toUpperCase() : ''
 }
 
-const EIC_SECTIONS: SectionDef[] = [
-  {
-    id: 'contractor',
-    title: 'Contractor Details',
-    format: (cert, fields) => joinFields([
-      ['NAPIT Membership No', fields.napitMembershipNo],
-      ['Company Name', cert.declaration?.companyName ?? ''],
-      ['Inspector Name', cert.declaration?.inspectorName ?? ''],
-      ['Address', cert.declaration?.companyAddress ?? ''],
-      ['Position', cert.declaration?.position ?? ''],
-      ['Registration No', cert.declaration?.registrationNumber ?? ''],
-      ['Certificate Serial No', fields.certificateSerial || cert.reportNumber || ''],
-    ]),
-  },
-  {
-    id: 'installation',
-    title: 'Installation Address',
-    format: (cert) => joinFields([
-      ['Address', cert.installationDetails?.installationAddress ?? ''],
-      ['Postcode', extractPostcode(cert.installationDetails?.installationAddress) ?? ''],
-      ['Premises Type', cert.installationDetails?.premisesType ?? ''],
-      ['Occupier', cert.installationDetails?.occupier ?? ''],
-    ]),
-  },
-  {
-    id: 'client',
-    title: 'Client Details',
-    format: (cert) => joinFields([
-      ['Client Name', cert.clientDetails?.clientName ?? ''],
-      ['Client Address', cert.clientDetails?.clientAddress ?? ''],
-    ]),
-  },
-  {
-    id: 'work',
-    title: 'Work Details',
-    format: (cert, fields) => joinFields([
-      ['Work Category', fields.workCategory],
-      ['Description of Work', fields.workDescription
-        || cert.extentAndLimitations?.extentCovered || ''],
-      ['Date of Completion', fields.completionDate || cert.declaration?.dateInspected || ''],
-    ]),
-  },
-  {
-    id: 'all',
-    title: 'All Fields (Combined)',
-    format: (cert, fields) => {
-      const sections = EIC_SECTIONS.filter((s) => s.id !== 'all')
-      return sections.map((s) => `--- ${s.title} ---\n${s.format(cert, fields)}`).join('\n\n')
-    },
-  },
-]
+function fmtDate(iso?: string | null): string {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleDateString('en-GB', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+    })
+  } catch {
+    return iso
+  }
+}
 
 // ============================================================
-// COMPONENT
+// COMPONENT: FieldRow — individual copy row per NAPIT portal field
+// ============================================================
+
+function FieldRow({
+  fieldId,
+  label,
+  value,
+  hint,
+  icon: Icon,
+  copyState,
+  onCopy,
+  empty,
+}: {
+  fieldId: string
+  label: string
+  value: string
+  hint?: string
+  icon?: React.ElementType
+  copyState: CopyState
+  onCopy: (fieldId: string, value: string) => void
+  empty?: boolean
+}) {
+  const isCopied = copyState[fieldId] === 'copied'
+  const IconEl = Icon ?? Hash
+
+  return (
+    <div className={`flex items-start gap-3 px-3 py-3 transition-colors ${isCopied ? 'bg-certvoice-green/5' : ''}`}>
+      <IconEl className={`w-4 h-4 mt-0.5 shrink-0 ${isCopied ? 'text-certvoice-green' : 'text-certvoice-muted'}`} />
+
+      <div className="flex-1 min-w-0">
+        <div className="text-[10px] font-semibold text-certvoice-muted uppercase tracking-wider mb-0.5">
+          {label}
+        </div>
+        {empty ? (
+          <div className="text-xs text-certvoice-muted/50 italic">Not set — enter manually in portal</div>
+        ) : (
+          <div className="text-sm text-certvoice-text font-mono break-words leading-relaxed">{value}</div>
+        )}
+        {hint && <div className="text-[10px] text-certvoice-muted/60 mt-0.5 leading-relaxed">{hint}</div>}
+      </div>
+
+      {!empty && (
+        <button
+          onClick={() => onCopy(fieldId, value)}
+          className={`shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold
+            transition-all duration-200 active:scale-95
+            ${isCopied
+              ? 'bg-certvoice-green/15 text-certvoice-green'
+              : 'bg-certvoice-accent/15 text-certvoice-accent hover:bg-certvoice-accent/25'
+            }`}
+          aria-label={isCopied ? 'Copied' : `Copy ${label}`}
+        >
+          {isCopied ? <><Check className="w-3 h-3" /> Copied</> : <><Copy className="w-3 h-3" /> Copy</>}
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ============================================================
+// COMPONENT: CollapsibleSection
+// ============================================================
+
+function CollapsibleSection({
+  id,
+  title,
+  defaultOpen = false,
+  children,
+}: {
+  id: string
+  title: string
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
+  const [isOpen, setIsOpen] = useState(defaultOpen)
+
+  return (
+    <div className="cv-panel overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setIsOpen((o) => !o)}
+        className="w-full flex items-center justify-between p-3 text-left"
+        aria-expanded={isOpen}
+        aria-controls={`section-${id}`}
+      >
+        <span className="text-xs font-semibold text-certvoice-text">{title}</span>
+        {isOpen
+          ? <ChevronUp className="w-4 h-4 text-certvoice-muted" />
+          : <ChevronDown className="w-4 h-4 text-certvoice-muted" />}
+      </button>
+
+      {isOpen && (
+        <div id={`section-${id}`} className="border-t border-certvoice-border divide-y divide-certvoice-border/50">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================
+// MAIN COMPONENT
 // ============================================================
 
 export default function NapitExport() {
@@ -164,21 +220,27 @@ export default function NapitExport() {
   // --- State ---
   const [pageState, setPageState] = useState<PageState>('loading')
   const [certificate, setCertificate] = useState<Partial<EICRCertificate>>({})
-  const [copiedSections, setCopiedSections] = useState<Set<string>>(new Set())
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['contractor', 'installation', 'client', 'work']))
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [copyState, setCopyState] = useState<CopyState>({})
 
-  // --- NAPIT-specific editable fields ---
+  // --- Editable NAPIT fields ---
   const [napitFields, setNapitFields] = useState<NapitFields>({
     napitMembershipNo: '',
     certificateSerial: '',
     workCategory: WORK_CATEGORIES[0],
     workDescription: '',
     completionDate: '',
+    customerEmail: '',
+    numberOfAccessories: '',
+    deliveryMethod: 'electronic',
   })
 
+  const updateField = useCallback(<K extends keyof NapitFields>(key: K, value: NapitFields[K]) => {
+    setNapitFields((prev) => ({ ...prev, [key]: value }))
+  }, [])
+
   // ============================================================
-  // LOAD CERTIFICATE
+  // LOAD
   // ============================================================
 
   useEffect(() => {
@@ -230,64 +292,42 @@ export default function NapitExport() {
   // COPY HANDLER
   // ============================================================
 
-  const handleCopy = useCallback(async (sectionId: string, text: string) => {
+  const handleCopy = useCallback(async (fieldId: string, text: string) => {
     try {
       await navigator.clipboard.writeText(text)
-      setCopiedSections((prev) => new Set(prev).add(sectionId))
-      trackNapitEvent('section_copied', sectionId)
+      setCopyState((prev) => ({ ...prev, [fieldId]: 'copied' }))
+      trackNapitEvent('field_copied', fieldId)
 
       setTimeout(() => {
-        setCopiedSections((prev) => {
-          const next = new Set(prev)
-          next.delete(sectionId)
-          return next
-        })
+        setCopyState((prev) => ({ ...prev, [fieldId]: 'idle' }))
       }, 3000)
     } catch (err) {
       captureError(err, 'NapitExport.handleCopy')
     }
   }, [])
 
-  const handleCopyAll = useCallback(async () => {
-    const allSection = EIC_SECTIONS.find((s) => s.id === 'all')
-    if (!allSection) return
-    const text = allSection.format(certificate, napitFields)
-    await handleCopy('all', text)
-  }, [certificate, napitFields, handleCopy])
-
   // ============================================================
-  // SECTION TOGGLE
+  // DERIVED VALUES
   // ============================================================
 
-  const toggleSection = useCallback((sectionId: string) => {
-    setExpandedSections((prev) => {
-      const next = new Set(prev)
-      if (next.has(sectionId)) next.delete(sectionId)
-      else next.add(sectionId)
-      return next
-    })
-  }, [])
+  const installationAddress = certificate.installationDetails?.installationAddress ?? ''
+  const postcode = extractPostcode(installationAddress)
+  const clientName = certificate.clientDetails?.clientName ?? ''
+  const engineerName = certificate.declaration?.inspectorName ?? ''
+  const dateDisplay = fmtDate(napitFields.completionDate || certificate.declaration?.dateInspected)
 
-  // ============================================================
-  // FIELD UPDATE
-  // ============================================================
+  const readyToNotify =
+    !!installationAddress &&
+    !!postcode &&
+    !!clientName &&
+    !!napitFields.workCategory &&
+    !!dateDisplay &&
+    !!napitFields.certificateSerial
 
-  const updateField = useCallback((field: keyof NapitFields, value: string) => {
-    setNapitFields((prev) => ({ ...prev, [field]: value }))
-  }, [])
-
-  // ============================================================
-  // PROGRESS
-  // ============================================================
-
-  const copyableSections = EIC_SECTIONS.filter((s) => s.id !== 'all')
-  const copiedCount = useMemo(
-    () => copyableSections.filter((s) => copiedSections.has(s.id)).length,
-    [copiedSections, copyableSections]
-  )
-  const progressPct = copyableSections.length > 0
-    ? Math.round((copiedCount / copyableSections.length) * 100)
-    : 0
+  // Progress — mandatory fields copied
+  const MANDATORY = ['address', 'postcode', 'clientName', 'workCategory', 'completionDate', 'certificateSerial']
+  const copiedCount = MANDATORY.filter((f) => copyState[f] === 'copied').length
+  const progressPct = Math.round((copiedCount / MANDATORY.length) * 100)
 
   // ============================================================
   // RENDER: LOADING
@@ -309,15 +349,14 @@ export default function NapitExport() {
   if (pageState === 'not-applicable') {
     return (
       <div className="max-w-lg mx-auto px-4 py-8 space-y-4">
-        <Helmet>
-          <title>NAPIT Export | CertVoice</title>
-        </Helmet>
+        <Helmet><title>NAPIT Export | CertVoice</title></Helmet>
+
         <div className="flex items-center gap-3">
           <Link
             to={id ? `/inspect/${id}` : '/dashboard'}
             className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
                        text-certvoice-muted hover:text-certvoice-text transition-colors"
-            title="Back"
+            aria-label="Back"
           >
             <ArrowLeft className="w-4 h-4" />
           </Link>
@@ -331,13 +370,10 @@ export default function NapitExport() {
           <div className="flex items-start gap-3">
             <Info className="w-5 h-5 text-certvoice-accent shrink-0 mt-0.5" />
             <div className="space-y-2">
-              <p className="text-sm font-semibold text-certvoice-text">
-                EICR — No notification required
-              </p>
+              <p className="text-sm font-semibold text-certvoice-text">EICR — No notification required</p>
               <p className="text-xs text-certvoice-muted leading-relaxed">
                 Electrical Installation Condition Reports (EICRs) do not require Part P
-                notification to NAPIT, NICEIC, or Building Control. The PDF report goes
-                directly to the client.
+                notification to NAPIT or Building Control. The PDF goes directly to the client.
               </p>
               <p className="text-xs text-certvoice-muted leading-relaxed">
                 Only new electrical work (EIC certificates and notifiable Minor Works)
@@ -376,42 +412,45 @@ export default function NapitExport() {
   // RENDER: READY
   // ============================================================
 
-  const address = certificate.installationDetails?.installationAddress ?? 'Certificate'
-
   return (
     <>
       <Helmet>
         <title>NAPIT Export | CertVoice</title>
-        <meta name="description" content="Export certificate data for NAPIT Online notification" />
+        <meta name="description" content="Export certificate data for NAPIT Part P notification" />
       </Helmet>
 
       <div className="max-w-lg mx-auto px-4 py-4 space-y-4">
-        {/* ---- Sticky Header ---- */}
+
+        {/* ── Sticky header ── */}
         <div className="sticky top-0 z-10 bg-certvoice-bg/95 backdrop-blur-sm pb-3 -mx-4 px-4 pt-4 border-b border-certvoice-border">
           <div className="flex items-center gap-3">
             <Link
               to={id ? `/inspect/${id}` : '/dashboard'}
               className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
                          text-certvoice-muted hover:text-certvoice-text transition-colors"
-              title="Back to certificate"
+              aria-label="Back to certificate"
             >
               <ArrowLeft className="w-4 h-4" />
             </Link>
             <div className="min-w-0 flex-1">
               <h1 className="text-sm font-bold text-certvoice-text truncate flex items-center gap-2">
                 <Zap className="w-4 h-4 text-certvoice-accent shrink-0" />
-                NAPIT Notification
+                NAPIT Part P Notification
               </h1>
-              <p className="text-[10px] text-certvoice-muted truncate">{address}</p>
+              <p className="text-[10px] text-certvoice-muted truncate">
+                {installationAddress || clientName || 'Certificate'}
+              </p>
             </div>
-            <button
-              type="button"
-              onClick={handleCopyAll}
-              className="cv-btn-primary flex items-center gap-1.5 text-xs px-3 py-2"
+            <a
+              href="https://www.napitonline.co.uk"
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => trackNapitEvent('portal_opened', resolvedType)}
+              className={`cv-btn-primary flex items-center gap-1.5 text-xs px-3 py-2 ${!readyToNotify ? 'opacity-50' : ''}`}
             >
-              {copiedSections.has('all') ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-              {copiedSections.has('all') ? 'Copied!' : 'Copy All'}
-            </button>
+              <ExternalLink className="w-3.5 h-3.5" />
+              Open NAPIT
+            </a>
           </div>
 
           {/* Progress bar */}
@@ -423,38 +462,42 @@ export default function NapitExport() {
               />
             </div>
             <span className="text-[10px] text-certvoice-muted whitespace-nowrap">
-              {copiedCount}/{copyableSections.length} copied
+              {copiedCount}/{MANDATORY.length} copied
             </span>
           </div>
         </div>
 
-        {/* ---- NAPIT Portal Link ---- */}
-        <a
-          href="https://www.napitonline.co.uk"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="cv-panel flex items-center gap-3 p-3 hover:border-certvoice-accent/50 transition-colors"
-        >
-          <ExternalLink className="w-4 h-4 text-certvoice-accent shrink-0" />
-          <div className="min-w-0">
-            <p className="text-xs font-semibold text-certvoice-text">Open NAPIT Online</p>
-            <p className="text-[10px] text-certvoice-muted">napitonline.co.uk — log in and start a new notification</p>
-          </div>
-        </a>
-
-        {/* ---- Info Banner ---- */}
+        {/* ── Info banner ── */}
         <div className="cv-panel border-certvoice-accent/20 bg-certvoice-accent/5 p-3">
-          <p className="text-[10px] text-certvoice-muted leading-relaxed">
-            Copy each section below and paste into the matching fields on NAPIT Online.
-            Edit the NAPIT-specific fields (membership number, work category) before copying.
-          </p>
+          <div className="flex items-start gap-2.5">
+            <ExternalLink className="w-4 h-4 text-certvoice-accent shrink-0 mt-0.5" />
+            <p className="text-[10px] text-certvoice-muted leading-relaxed">
+              Open NAPIT in another tab, then copy each field and paste directly into the portal.
+              Your job data is already filled — no retyping needed.
+            </p>
+          </div>
         </div>
 
-        {/* ---- NAPIT-Specific Editable Fields ---- */}
-        <div className="cv-panel p-3 space-y-3">
-          <p className="text-xs font-semibold text-certvoice-text">NAPIT Fields</p>
+        {/* ── Readiness warning ── */}
+        {!readyToNotify && (
+          <div className="cv-panel border-certvoice-amber/25 bg-certvoice-amber/5 p-3">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-certvoice-amber shrink-0 mt-0.5" />
+              <p className="text-[10px] text-certvoice-muted leading-relaxed">
+                Fill in the NAPIT-specific fields below, then copy each portal field in order.
+                Address, postcode, client name, work category, date, and certificate number are required.
+              </p>
+            </div>
+          </div>
+        )}
 
-          <div className="space-y-2">
+        {/* ── Section 1: NAPIT-specific editable fields ── */}
+        <CollapsibleSection id="napit-fields" title="1 — NAPIT-Specific Fields" defaultOpen>
+          <div className="p-3 space-y-3">
+            <p className="text-[10px] text-certvoice-muted">
+              These fields are not on your certificate — fill them in once before copying.
+            </p>
+
             <label className="block">
               <span className="text-[10px] text-certvoice-muted">NAPIT Membership Number</span>
               <input
@@ -469,20 +512,7 @@ export default function NapitExport() {
             </label>
 
             <label className="block">
-              <span className="text-[10px] text-certvoice-muted">Certificate Serial Number</span>
-              <input
-                type="text"
-                value={napitFields.certificateSerial}
-                onChange={(e) => updateField('certificateSerial', e.target.value)}
-                placeholder="Pre-filled from certificate"
-                className="mt-1 w-full bg-certvoice-surface-2 border border-certvoice-border rounded-lg px-3 py-2
-                           text-sm text-certvoice-text placeholder:text-certvoice-muted/40
-                           focus:outline-none focus:border-certvoice-accent"
-              />
-            </label>
-
-            <label className="block">
-              <span className="text-[10px] text-certvoice-muted">Work Category</span>
+              <span className="text-[10px] text-certvoice-muted">Work Category (Works Bar)</span>
               <select
                 value={napitFields.workCategory}
                 onChange={(e) => updateField('workCategory', e.target.value)}
@@ -496,81 +526,223 @@ export default function NapitExport() {
             </label>
 
             <label className="block">
-              <span className="text-[10px] text-certvoice-muted">Description of Work</span>
-              <textarea
-                value={napitFields.workDescription}
-                onChange={(e) => updateField('workDescription', e.target.value)}
-                rows={2}
-                placeholder="Brief description of electrical work carried out"
-                className="mt-1 w-full bg-certvoice-surface-2 border border-certvoice-border rounded-lg px-3 py-2
+              <span className="text-[10px] text-certvoice-muted">Number of Accessories (statistical)</span>
+              <input
+                type="number"
+                value={napitFields.numberOfAccessories}
+                onChange={(e) => updateField('numberOfAccessories', e.target.value)}
+                placeholder="e.g. 12"
+                min="0"
+                inputMode="numeric"
+                className="mt-1 w-32 bg-certvoice-surface-2 border border-certvoice-border rounded-lg px-3 py-2
                            text-sm text-certvoice-text placeholder:text-certvoice-muted/40
-                           focus:outline-none focus:border-certvoice-accent resize-none"
+                           focus:outline-none focus:border-certvoice-accent"
               />
             </label>
 
-            <label className="block">
-              <span className="text-[10px] text-certvoice-muted">Date of Completion</span>
-              <input
-                type="date"
-                value={napitFields.completionDate}
-                onChange={(e) => updateField('completionDate', e.target.value)}
-                className="mt-1 w-full bg-certvoice-surface-2 border border-certvoice-border rounded-lg px-3 py-2
-                           text-sm text-certvoice-text focus:outline-none focus:border-certvoice-accent"
-              />
-            </label>
+            <div>
+              <span className="text-[10px] text-certvoice-muted block mb-1.5">BRCC Delivery Method</span>
+              <div className="flex gap-2">
+                {(['electronic', 'postal'] as const).map((method) => (
+                  <button
+                    key={method}
+                    type="button"
+                    onClick={() => updateField('deliveryMethod', method)}
+                    className={`flex-1 py-2 rounded-lg border text-xs font-semibold capitalize transition-all
+                      ${napitFields.deliveryMethod === method
+                        ? 'bg-certvoice-accent/15 border-certvoice-accent/40 text-certvoice-accent'
+                        : 'bg-certvoice-surface-2 border-certvoice-border text-certvoice-muted hover:border-certvoice-muted'
+                      }`}
+                  >
+                    {method}
+                  </button>
+                ))}
+              </div>
+              {napitFields.deliveryMethod === 'electronic' && (
+                <input
+                  type="email"
+                  value={napitFields.customerEmail}
+                  onChange={(e) => updateField('customerEmail', e.target.value)}
+                  placeholder="Customer email for BRCC delivery"
+                  className="mt-2 w-full bg-certvoice-surface-2 border border-certvoice-border rounded-lg px-3 py-2
+                             text-sm text-certvoice-text placeholder:text-certvoice-muted/40
+                             focus:outline-none focus:border-certvoice-accent"
+                />
+              )}
+              {napitFields.deliveryMethod === 'postal' && (
+                <p className="text-[10px] text-certvoice-muted/60 mt-2 leading-relaxed">
+                  NAPIT will post the BRCC to the installation address. Postal costs more credits than electronic.
+                </p>
+              )}
+            </div>
+          </div>
+        </CollapsibleSection>
+
+        {/* ── Section 2: Portal fields — copy one by one ── */}
+        <CollapsibleSection id="portal-fields" title="2 — Copy Fields into Portal" defaultOpen>
+
+          {/* Operative note */}
+          <div className="px-3 py-3">
+            <div className="flex items-start gap-2.5 p-2.5 rounded-lg bg-certvoice-surface-2 border border-certvoice-border">
+              <Info className="w-3.5 h-3.5 text-certvoice-muted shrink-0 mt-0.5" />
+              <p className="text-[10px] text-certvoice-muted leading-relaxed">
+                <span className="text-certvoice-text font-semibold">Operative</span> is
+                auto-populated by NAPIT from your account login. Confirm it matches:{' '}
+                <span className="text-certvoice-text font-mono">
+                  {engineerName || 'Not set in profile'}
+                </span>
+              </p>
+            </div>
+          </div>
+
+          <FieldRow
+            fieldId="address"
+            label="Property / Installation Address"
+            value={installationAddress}
+            hint="Full address — NAPIT verifies this against their records"
+            icon={MapPin}
+            copyState={copyState}
+            onCopy={handleCopy}
+            empty={!installationAddress}
+          />
+          <FieldRow
+            fieldId="postcode"
+            label="Postcode"
+            value={postcode}
+            hint="Determines which local authority receives the notification"
+            icon={MapPin}
+            copyState={copyState}
+            onCopy={handleCopy}
+            empty={!postcode}
+          />
+          <FieldRow
+            fieldId="clientName"
+            label="Customer / Householder Name"
+            value={clientName}
+            icon={User}
+            copyState={copyState}
+            onCopy={handleCopy}
+            empty={!clientName}
+          />
+          <FieldRow
+            fieldId="workCategory"
+            label="Type of Work (Works Bar)"
+            value={napitFields.workCategory}
+            hint="Select matching option from the Works Bar dropdown in the portal"
+            icon={Zap}
+            copyState={copyState}
+            onCopy={handleCopy}
+            empty={!napitFields.workCategory}
+          />
+          <FieldRow
+            fieldId="completionDate"
+            label="Date of Completion"
+            value={dateDisplay}
+            hint="DD/MM/YYYY — use the calendar picker in the portal"
+            icon={Calendar}
+            copyState={copyState}
+            onCopy={handleCopy}
+            empty={!dateDisplay}
+          />
+          <FieldRow
+            fieldId="certificateSerial"
+            label="Certificate Number (EIC / MWC ref)"
+            value={napitFields.certificateSerial}
+            hint="Reference number from your CertVoice certificate"
+            icon={FileText}
+            copyState={copyState}
+            onCopy={handleCopy}
+            empty={!napitFields.certificateSerial}
+          />
+          {napitFields.numberOfAccessories && (
+            <FieldRow
+              fieldId="accessories"
+              label="Number of Accessories"
+              value={napitFields.numberOfAccessories}
+              icon={Hash}
+              copyState={copyState}
+              onCopy={handleCopy}
+            />
+          )}
+          {napitFields.deliveryMethod === 'electronic' && napitFields.customerEmail && (
+            <FieldRow
+              fieldId="customerEmail"
+              label="Customer Email Address"
+              value={napitFields.customerEmail}
+              hint="BRCC will be emailed directly to your customer"
+              icon={Mail}
+              copyState={copyState}
+              onCopy={handleCopy}
+            />
+          )}
+          {napitFields.workDescription && (
+            <FieldRow
+              fieldId="workDescription"
+              label="Description / Notes"
+              value={napitFields.workDescription}
+              icon={FileText}
+              copyState={copyState}
+              onCopy={handleCopy}
+            />
+          )}
+        </CollapsibleSection>
+
+        {/* ── Assessment consent notice ── */}
+        <div className="cv-panel p-3">
+          <div className="flex items-start gap-2.5">
+            <Info className="w-4 h-4 text-certvoice-muted shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-semibold text-certvoice-text mb-0.5">Assessment consent checkbox</p>
+              <p className="text-[10px] text-certvoice-muted leading-relaxed">
+                The NAPIT portal includes: "I consent to this job being used for my assessment."
+                Tick this if you're happy for NAPIT to use this notification as part of your
+                periodic assessment. Your choice — no preference either way.
+              </p>
+            </div>
           </div>
         </div>
 
-        {/* ---- Copyable Sections ---- */}
-        {copyableSections.map((section) => {
-          const isExpanded = expandedSections.has(section.id)
-          const isCopied = copiedSections.has(section.id)
-          const formatted = section.format(certificate, napitFields)
-
-          return (
-            <div key={section.id} className="cv-panel overflow-hidden">
-              <button
-                type="button"
-                onClick={() => toggleSection(section.id)}
-                className="w-full flex items-center justify-between p-3 text-left"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-certvoice-text">{section.title}</span>
-                  {isCopied && (
-                    <span className="text-[9px] text-certvoice-green font-semibold flex items-center gap-0.5">
-                      <Check className="w-2.5 h-2.5" /> Copied
-                    </span>
-                  )}
-                </div>
-                {isExpanded ? (
-                  <ChevronUp className="w-4 h-4 text-certvoice-muted" />
-                ) : (
-                  <ChevronDown className="w-4 h-4 text-certvoice-muted" />
-                )}
-              </button>
-
-              {isExpanded && (
-                <div className="border-t border-certvoice-border p-3 space-y-2">
-                  <pre className="text-xs text-certvoice-text font-mono whitespace-pre-wrap leading-relaxed bg-certvoice-surface-2 rounded-lg p-3">
-                    {formatted || '(No data)'}
-                  </pre>
-                  <button
-                    type="button"
-                    onClick={() => handleCopy(section.id, formatted)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                      isCopied
-                        ? 'bg-certvoice-green/15 text-certvoice-green'
-                        : 'bg-certvoice-accent/15 text-certvoice-accent hover:bg-certvoice-accent/25'
-                    }`}
-                  >
-                    {isCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                    {isCopied ? 'Copied!' : 'Copy section'}
-                  </button>
-                </div>
-              )}
+        {/* ── Credit cost notice ── */}
+        <div className="cv-panel border-certvoice-amber/25 p-3">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-certvoice-amber shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-semibold text-certvoice-text mb-0.5">Notification credits</p>
+              <p className="text-[10px] text-certvoice-muted leading-relaxed">
+                Each Part P submission uses one NAPIT credit (~£2.20 + VAT). Ensure you have
+                credits loaded before submitting. NAPIT requires notification within 21 days
+                of completion — the statutory deadline is 30 days.
+              </p>
             </div>
-          )
-        })}
+          </div>
+        </div>
+
+        {/* ── Footer CTA ── */}
+        <div className="pt-2 pb-10 text-center space-y-3">
+          <a
+            href="https://www.napitonline.co.uk"
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => readyToNotify && trackNapitEvent('portal_opened_footer', resolvedType)}
+            className={`inline-flex items-center gap-2 cv-btn-primary px-6 py-3 ${!readyToNotify ? 'opacity-50 pointer-events-none' : ''}`}
+          >
+            <ExternalLink className="w-4 h-4" />
+            {readyToNotify ? 'Open NAPIT Portal' : 'Complete required fields first'}
+          </a>
+
+          <div className="space-y-1">
+            <p className="text-[10px] text-certvoice-muted">
+              CertVoice does not submit to NAPIT on your behalf. You remain in full control of the submission.
+            </p>
+            <Link
+              to={id ? `/inspect/${id}` : '/dashboard'}
+              className="text-xs text-certvoice-accent hover:underline underline-offset-2"
+            >
+              Back to certificate
+            </Link>
+          </div>
+        </div>
+
       </div>
     </>
   )
