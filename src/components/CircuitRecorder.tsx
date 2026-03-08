@@ -579,6 +579,7 @@ export default function CircuitRecorder({
       const token = await getToken()
       const apiBase = import.meta.env.VITE_API_BASE_URL
 
+      console.log('EXTRACT PAYLOAD:', { transcript, dbContext, type: 'circuit' })
       const res = await fetch(`${apiBase}/api/extract`, {
         method: 'POST',
         headers: {
