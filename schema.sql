@@ -509,7 +509,7 @@ BEGIN
   SELECT EXISTS (
     SELECT 1 FROM observations
     WHERE certificate_id = cert_id
-      AND classification_code IN ('C1', 'C2')
+      AND classification_code IN ('C1', 'C2', 'FI')
   ) INTO has_c1_c2;
 
   IF has_c1_c2 THEN
