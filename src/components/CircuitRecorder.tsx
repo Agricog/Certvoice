@@ -5,6 +5,11 @@
  *   - 'voice': Record audio → transcribe → AI extract → review grid
  *   - 'manual': Jump straight to review grid for typed entry
  *
+ * EDIT MODE: When editingCircuit is provided, the review grid includes
+ * a voice button so inspectors can speak test results into board-scanned
+ * circuits without manual typing. AI-extracted fields merge into existing
+ * data — board scan fields (circuit number, description, MCB) are preserved.
+ *
  * Confidence UX:
  *   - AI-extracted fields show amber highlight when confidence < 0.7
  *   - "Low confidence — verify this value" hint on amber fields
@@ -565,7 +570,7 @@ export default function CircuitRecorder({
       await extractCircuitData(data.transcript)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Transcription failed')
-      setStep('idle')
+      setStep('review')
     }
   }
 
@@ -588,6 +593,9 @@ export default function CircuitRecorder({
       const data = await res.json()
       if (data.success && data.circuit) {
         const c = data.circuit
+        // MERGE: only overwrite fields that the AI actually extracted (non-null).
+        // This preserves board-scan data (circuit number, description, MCB type/rating)
+        // while filling in test results from voice.
         setFormData((prev) => ({
           ...prev,
           circuit_number: c.circuitNumber ?? prev.circuit_number,
@@ -624,7 +632,9 @@ export default function CircuitRecorder({
       // If extraction fails, still show review grid with transcript in comments
       setFormData((prev) => ({
         ...prev,
-        comments: `[Voice transcript] ${transcript}`,
+        comments: prev.comments
+          ? `${prev.comments}\n[Voice transcript] ${transcript}`
+          : `[Voice transcript] ${transcript}`,
       }))
       setVoiceTranscript(transcript)
       setStep('review')
@@ -707,15 +717,19 @@ export default function CircuitRecorder({
     }
   }, [])
 
-  // ── Render: Voice capture steps ───────────────────────────────────────────
+  // ── Render: Voice capture steps (full-screen overlay) ─────────────────────
 
   if (step === 'idle' || step === 'recording') {
     return (
       <div className="fixed inset-0 bg-slate-950/95 z-50 flex flex-col items-center justify-center p-6">
         <div className="text-center max-w-sm">
-          <h2 className="text-white text-lg font-semibold mb-2">Record Circuit Details</h2>
+          <h2 className="text-white text-lg font-semibold mb-2">
+            {editingCircuit ? 'Voice Test Results' : 'Record Circuit Details'}
+          </h2>
           <p className="text-slate-400 text-sm mb-8">
-            Describe the circuit — number, description, cable type, protective device, test results.
+            {editingCircuit
+              ? `Speak the test results for Cct ${formData.circuit_number} — Zs, R1+R2, insulation, polarity, RCD.`
+              : 'Describe the circuit — number, description, cable type, protective device, test results.'}
           </p>
 
           {/* Mic button with audio level ring */}
@@ -758,10 +772,18 @@ export default function CircuitRecorder({
 
           <button
             type="button"
-            onClick={onCancel}
+            onClick={() => {
+              // If we came from the review grid (edit mode voice), go back to review
+              // Otherwise cancel the whole recorder
+              if (editingCircuit || mode === 'manual') {
+                setStep('review')
+              } else {
+                onCancel()
+              }
+            }}
             className="mt-8 text-slate-500 text-sm hover:text-slate-300 transition-colors"
           >
-            Cancel
+            {editingCircuit || mode === 'manual' ? 'Back to form' : 'Cancel'}
           </button>
         </div>
       </div>
@@ -779,7 +801,7 @@ export default function CircuitRecorder({
     )
   }
 
-  // ── Render: Review grid (shared by voice + manual) ────────────────────────
+  // ── Render: Review grid (shared by voice + manual + edit) ─────────────────
 
   return (
     <div className="fixed inset-0 bg-slate-950 z-50 overflow-y-auto">
@@ -796,15 +818,30 @@ export default function CircuitRecorder({
         <h2 className="text-white text-sm font-semibold">
           {editingCircuit ? 'Edit Circuit' : mode === 'manual' ? 'Manual Entry' : 'Review Circuit'}
         </h2>
-        <button
-          type="button"
-          onClick={handleConfirm}
-          disabled={isSubmitting}
-          className="flex items-center gap-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white text-sm font-medium px-3 py-1.5 rounded-md transition-colors"
-        >
-          {isSubmitting ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-          Confirm
-        </button>
+        <div className="flex items-center gap-2">
+          {/* ── VOICE BUTTON ON REVIEW GRID ── */}
+          <button
+            type="button"
+            onClick={() => {
+              setError(null)
+              setStep('idle')
+            }}
+            className="flex items-center gap-1 bg-slate-700 hover:bg-slate-600 text-blue-400 text-sm font-medium px-3 py-1.5 rounded-md transition-colors"
+            title="Voice input test results"
+          >
+            <Mic size={14} />
+            Voice
+          </button>
+          <button
+            type="button"
+            onClick={handleConfirm}
+            disabled={isSubmitting}
+            className="flex items-center gap-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white text-sm font-medium px-3 py-1.5 rounded-md transition-colors"
+          >
+            {isSubmitting ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+            Confirm
+          </button>
+        </div>
       </div>
 
       {/* Error banner */}
