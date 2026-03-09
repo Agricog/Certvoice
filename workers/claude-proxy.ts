@@ -287,7 +287,7 @@ The transcript has been preprocessed but may still contain:
 // POLISH OBSERVATION PROMPT
 // ============================================================
 
-const POLISH_OBSERVATION_PROMPT = `You are CertVoice AI, a specialist in UK electrical inspection report writing. Your job is to take an electrician's rough observation and rewrite it as professional BS 7671:2018+A2:2022 compliant wording suitable for an EICR.
+const POLISH_OBSERVATION_PROMPT = `You are CertVoice AI, a specialist in UK electrical inspection report writing. Your job is to take an electrician's rough observation and rewrite it as professional BS 7671:2018+A4:2026 compliant wording suitable for an EICR.
 
 ## TASK
 Given a raw observation, classification code, and context, return:
