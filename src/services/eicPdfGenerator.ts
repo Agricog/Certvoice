@@ -1,7 +1,7 @@
 /**
  * CertVoice — EIC PDF Generator (Client-Side)
  *
- * Generates official BS 7671:2018+A2:2022 compliant Electrical Installation
+ * Generates official BS 7671:2018+A4:2026 compliant Electrical Installation
  * Certificates using pdf-lib. Runs entirely in the browser — works offline.
  *
  * Pages:
@@ -175,7 +175,7 @@ function drawHeader(
     color: COLOURS.white,
   })
 
-  page.drawText('In accordance with BS 7671:2018+A2:2022', {
+  page.drawText('In accordance with BS 7671:2018+A4:2026', {
     x: PAGE.marginLeft + 10,
     y: y - 30,
     size: FONT.small,
@@ -445,7 +445,7 @@ async function drawDeclarationsPartPPages(
   // --- Section F: Declaration ---
   y = drawSectionHeader(page, fonts.bold, y, 'Section F - Declaration')
 
-  const declText = 'I/We, the undersigned, being the person(s) responsible for the design, construction, inspection and testing of the electrical installation (as indicated by my/our signatures below), particulars of which are described in this Certificate, having exercised reasonable skill and care when carrying out the design, construction, inspection and testing, hereby declare that the said work for which I/we have been responsible is to the best of my/our knowledge and belief in accordance with BS 7671:2018+A2:2022, except for the departures, if any, detailed in Section E.'
+  const declText = 'I/We, the undersigned, being the person(s) responsible for the design, construction, inspection and testing of the electrical installation (as indicated by my/our signatures below), particulars of which are described in this Certificate, having exercised reasonable skill and care when carrying out the design, construction, inspection and testing, hereby declare that the said work for which I/we have been responsible is to the best of my/our knowledge and belief in accordance with BS 7671:2018+A4:2026, except for the departures, if any, detailed in Section E.'
   const declLines = wrapText(declText, fonts.regular, FONT.label, CONTENT_WIDTH)
   for (const line of declLines) {
     page.drawText(line, { x: PAGE.marginLeft, y, size: FONT.label, font: fonts.regular, color: COLOURS.text })
