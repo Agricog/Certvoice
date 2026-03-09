@@ -1,5 +1,5 @@
 /**
- * CertVoice — BS 7671:2018+A2:2022 EICR Inspection Schedule
+ * CertVoice — BS 7671:2018+A4:2026 EICR Inspection Schedule
  *
  * Pre-populated inspection items matching the standard EICR
  * inspection schedule (Appendix 6 / Model Forms).
