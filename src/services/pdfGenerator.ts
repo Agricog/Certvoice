@@ -1,7 +1,7 @@
 /**
  * CertVoice — EICR PDF Generator (Client-Side)
  *
- * Generates official BS 7671:2018+A2:2022 compliant EICR certificates
+ * Generates official BS 7671:2018+A4:2026 compliant EICR certificates
  * using pdf-lib. Runs entirely in the browser — works offline.
  *
  * Pages:
@@ -166,7 +166,7 @@ function drawHeader(
     color: COLOURS.white,
   })
 
-  page.drawText('In accordance with BS 7671:2018+A2:2022', {
+  page.drawText('In accordance with BS 7671:2018+A4:2026', {
     x: PAGE.marginLeft + 10,
     y: y - 30,
     size: FONT.small,
