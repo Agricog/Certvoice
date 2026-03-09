@@ -159,10 +159,10 @@ Extract these fields from the transcript. Use null for fields not mentioned:
   "r1": "number or null — ring final line end-to-end",
   "rn": "number or null — ring final neutral end-to-end",
   "r2": "number or null — ring final CPC end-to-end",
-  "r1r2": "number or '>200' or 'LIM' or 'N/V' or null",
+  "r1r2": "number or null — R1+R2 continuity reading",
   "irTestVoltage": "number in volts or null (usually 500)",
-  "irLiveLive": "number or '>200' or 'LIM' or null — L-N insulation MΩ",
-  "irLiveEarth": "number or '>200' or 'LIM' or null — L-E insulation MΩ",
+  "irLiveLive": "string or number or null — L-N insulation MΩ. MUST return '>200' as the string '>200', NOT null",
+  "irLiveEarth": "string or number or null — L-E insulation MΩ. MUST return '>200' as the string '>200', NOT null",
   "zs": "number in ohms or null",
   "polarity": "TICK|CROSS or null — TICK if 'correct' or 'satisfactory'",
   "rcdDisconnectionTime": "number in ms or null",
@@ -171,6 +171,59 @@ Extract these fields from the transcript. Use null for fields not mentioned:
   "circuitType": "ring|radial or null — infer from r1/rn/r2 presence (ring) or absence (radial)",
   "status": "SATISFACTORY|UNSATISFACTORY — based on overall assessment"
 }
+
+## CRITICAL: FIELD MAPPING RULES FOR CIRCUIT DATA
+
+Electricians speak readings in a natural order. You MUST map each value to the CORRECT field based on the LABEL the electrician says, not the order they appear.
+
+**MATCHING RULES — always match the spoken label to the field:**
+- "Zs" followed by a number → zs field (earth fault loop impedance, typically 0.1–5.0 Ω)
+- "R1+R2" or "R1 plus R2" followed by a number → r1r2 field (continuity, typically 0.01–2.0 Ω)
+- "r1" followed by a number → r1 field (ring line end-to-end, typically 0.05–1.0 Ω)
+- "rn" followed by a number → rn field (ring neutral end-to-end, typically 0.05–1.0 Ω)
+- "r2" followed by a number → r2 field (ring CPC end-to-end, typically 0.05–1.5 Ω)
+- "R2" (uppercase, standalone) → r2 field
+- "insulation" or "IR" or "L to N" or "live to neutral" → irLiveLive
+- "L to E" or "live to earth" → irLiveEarth
+- "greater than 200" or ">200" or "more than 200" → the string ">200" (NOT null, NOT a number)
+- "RCD trips at" followed by a number → rcdDisconnectionTime in ms
+- "test button works/ok" → rcdTestButton: "TICK"
+- "polarity correct" → polarity: "TICK"
+
+**EXAMPLE:**
+Transcript: "Circuit 5, upstairs sockets, Zs 0.38 ohms, r1 0.21, rn 0.21, r2 0.35, R1+R2 0.11, insulation tested at 500 volts, L to N greater than 200 meg, L to E greater than 200 meg, polarity correct, RCD trips at 18 milliseconds, test button works, satisfactory"
+
+Correct extraction:
+- circuitNumber: "5"
+- circuitDescription: "upstairs sockets"
+- zs: 0.38         ← "Zs 0.38"
+- r1: 0.21          ← "r1 0.21"
+- rn: 0.21          ← "rn 0.21"
+- r2: 0.35          ← "r2 0.35"
+- r1r2: 0.11        ← "R1+R2 0.11"
+- irTestVoltage: 500 ← "tested at 500 volts"
+- irLiveLive: ">200" ← "L to N greater than 200 meg" (STRING, not null!)
+- irLiveEarth: ">200" ← "L to E greater than 200 meg" (STRING, not null!)
+- polarity: "TICK"   ← "polarity correct"
+- rcdDisconnectionTime: 18 ← "RCD trips at 18 milliseconds"
+- rcdTestButton: "TICK" ← "test button works"
+- status: "SATISFACTORY"
+- circuitType: "ring" ← r1/rn/r2 present means ring final
+
+**WRONG (do NOT do this):**
+- Putting 0.38 into r1r2 instead of zs
+- Putting 0.11 into zs instead of r1r2
+- Returning null for irLiveLive when ">200" was spoken
+
+## INSULATION RESISTANCE — SPECIAL STRING VALUES
+
+These are VALID string values for irLiveLive and irLiveEarth. Return them as STRINGS, not null:
+- ">200" — meter reads above 200 MΩ (excellent, most common domestic reading)
+- "LIM" — limitation, not tested (e.g. sensitive equipment)
+- "N/V" — not verified
+
+If the electrician says "greater than 200 meg" or "more than 200 megohms" or just ">200", return the string ">200".
+NEVER return null when the electrician has given an insulation reading.
 
 ## OBSERVATION FIELDS (when type = "observation")
 
@@ -275,7 +328,9 @@ Regulation: "Regulation 514.14.1"
 Remedial: "Apply appropriate warning labels at distribution board indicating the presence of two wiring colour systems."
 
 ## RESPONSE FORMAT
+
 Respond with ONLY valid JSON, no markdown, no explanation:
+
 {
   "polishedText": "string",
   "regulationReference": "string — e.g. Regulation 411.3.3",
@@ -315,7 +370,9 @@ For each circuit, assess your confidence:
 - **low**: Significant guesswork, heavily obscured, or ambiguous
 
 ## RESPONSE FORMAT
+
 Respond with ONLY valid JSON, no markdown, no explanation:
+
 {
   "boardReference": "string — e.g. 'DB1' or 'Consumer Unit' if visible, otherwise empty string",
   "circuits": [
@@ -481,7 +538,7 @@ function buildUserMessage(body: ExtractionRequest): string {
     message += `Existing circuits: ${body.existingCircuits.join(', ')}\n`
   }
 
-  message += `\nRespond with ONLY valid JSON.`
+  message += `\nRespond with ONLY valid JSON. Remember: ">200" for insulation readings must be returned as the STRING ">200", never as null.`
 
   return message
 }
@@ -527,7 +584,6 @@ async function callClaude(
   }
 
   const data = (await response.json()) as ClaudeResponse
-
   const textBlock = data.content.find((c) => c.type === 'text')
   if (!textBlock) {
     throw new Error('No text content in Claude response')
@@ -585,7 +641,6 @@ async function callClaudeVision(
   }
 
   const data = (await response.json()) as ClaudeResponse
-
   const textBlock = data.content.find((c) => c.type === 'text')
   if (!textBlock) {
     throw new Error('No text content in Claude response')
@@ -629,7 +684,6 @@ interface GuardResult {
   userId: string
   errorResponse?: never
 }
-
 interface GuardError {
   userId: null
   errorResponse: Response
@@ -882,8 +936,8 @@ async function handleExtractBoardPhoto(
       BOARD_SCAN_PROMPT,
       2048
     )
-    const extractedData = parseClaudeResponse(claudeResponse)
 
+    const extractedData = parseClaudeResponse(claudeResponse)
     const circuitCount = Array.isArray(extractedData.circuits)
       ? (extractedData.circuits as unknown[]).length
       : 0
