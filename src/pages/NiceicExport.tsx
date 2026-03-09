@@ -1064,7 +1064,7 @@ export default function NiceicExport() {
           {/* Footer */}
           <div className="pt-6 pb-10 text-center space-y-3">
             <p className="text-xs text-[#4A5568]">
-              Formatted to follow BS 7671:2018+A2:2022 Appendix 6 section order, designed for
+              Formatted to follow BS 7671:2018+A4:2026 Appendix 6 section order, designed for
               quick pasting into NOCS.
             </p>
             <Link
