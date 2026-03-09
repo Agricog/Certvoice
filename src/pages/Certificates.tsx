@@ -2,7 +2,7 @@
  * CertVoice — Certificates Page
  *
  * List of all certificates (EICR, Minor Works, EIC) with search,
- * status filtering, and cert type filtering.
+ * status filtering, cert type filtering, and delete.
  *
  * Offline-first: loads from IndexedDB immediately, then merges
  * API results when online.
@@ -28,6 +28,9 @@ import {
   Wrench,
   ClipboardList,
   Award,
+  Trash2,
+  AlertTriangle,
+  X,
 } from 'lucide-react'
 import type {
   EICRCertificate,
@@ -36,8 +39,8 @@ import type {
 } from '../types/eicr'
 import type { CertificateType } from '../types/minorWorks'
 import { captureError } from '../utils/errorTracking'
-import { listLocalCertificates } from '../services/offlineStore'
-import { listCertificates } from '../services/certificateApi'
+import { listLocalCertificates, deleteLocalCertificate } from '../services/offlineStore'
+import { listCertificates, deleteCertificate } from '../services/certificateApi'
 import { useApiToken } from '../hooks/useApiToken'
 
 // ============================================================
@@ -145,6 +148,7 @@ function mapCertToListItem(cert: Partial<EICRCertificate>, isLocal = false): Cer
   // EICR certificate
   const observations = cert.observations ?? []
   const assessment = cert.summaryOfCondition?.overallAssessment ?? null
+
   return {
     id: cert.id ?? '',
     reportNumber: cert.reportNumber ?? '',
@@ -177,6 +181,11 @@ function getCertLink(cert: CertificateListItem): string {
   return `/inspect/${cert.id}`
 }
 
+function getCertTypeLabel(type: CertificateType): string {
+  if (type === 'MINOR_WORKS') return 'Minor Works'
+  return type
+}
+
 // ============================================================
 // COMPONENT
 // ============================================================
@@ -190,6 +199,11 @@ export default function Certificates() {
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL')
   const [certTypeFilter, setCertTypeFilter] = useState<CertTypeFilter>('ALL')
+
+  // Delete state
+  const [deleteTarget, setDeleteTarget] = useState<CertificateListItem | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   // ---- Connectivity listener ----
   useEffect(() => {
@@ -229,11 +243,11 @@ export default function Certificates() {
         try {
           const { data: apiCerts } = await listCertificates(getToken)
           const apiItems = apiCerts.map((c) => mapCertToListItem(c as unknown as Partial<EICRCertificate>, false))
+
           // Merge: API wins for matching IDs, keep local-only certs
           const apiIds = new Set(apiItems.map((c) => c.id))
           const localOnly = localItems.filter((c) => !apiIds.has(c.id))
           const merged = [...apiItems, ...localOnly]
-
           setCertificates(merged)
         } catch (err) {
           // API failed — local data already shown, just log
@@ -252,6 +266,38 @@ export default function Certificates() {
   useEffect(() => {
     loadCertificates()
   }, [loadCertificates])
+
+  // ---- Delete certificate ----
+  const handleDelete = useCallback(async () => {
+    if (!deleteTarget) return
+
+    setDeleting(true)
+    setDeleteError(null)
+
+    try {
+      // Always delete from IndexedDB
+      await deleteLocalCertificate(deleteTarget.id)
+
+      // If online and not local-only, also delete from API
+      if (navigator.onLine && !deleteTarget.isLocal) {
+        try {
+          await deleteCertificate(getToken, deleteTarget.id)
+        } catch (err) {
+          // API delete failed — local is already gone, log but don't block
+          captureError(err, 'Certificates.deleteApi')
+        }
+      }
+
+      // Remove from list
+      setCertificates((prev) => prev.filter((c) => c.id !== deleteTarget.id))
+      setDeleteTarget(null)
+    } catch (err) {
+      captureError(err, 'Certificates.handleDelete')
+      setDeleteError('Failed to delete. Please try again.')
+    } finally {
+      setDeleting(false)
+    }
+  }, [deleteTarget, getToken])
 
   // ---- Filtered + sorted list ----
   const filteredCerts = useMemo(() => {
@@ -494,100 +540,118 @@ export default function Certificates() {
                     const { C1, C2, C3, FI } = cert.observationCounts
 
                     return (
-                      <Link
+                      <div
                         key={cert.id}
-                        to={getCertLink(cert)}
-                        className="cv-panel block p-4 hover:border-certvoice-accent/50 transition-colors"
+                        className="cv-panel p-4 hover:border-certvoice-accent/50 transition-colors relative"
                       >
-                        {/* Top row */}
-                        <div className="flex items-start justify-between mb-2">
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-semibold text-certvoice-text truncate">
-                              {cert.installationAddress}
+                        {/* Delete button — top right corner */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            setDeleteTarget(cert)
+                            setDeleteError(null)
+                          }}
+                          className="absolute top-3 right-3 w-7 h-7 rounded-md flex items-center justify-center
+                                     text-certvoice-muted/40 hover:text-red-400 hover:bg-red-500/10
+                                     transition-colors z-10"
+                          title="Delete certificate"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+
+                        <Link
+                          to={getCertLink(cert)}
+                          className="block"
+                        >
+                          {/* Top row */}
+                          <div className="flex items-start justify-between mb-2 pr-8">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-semibold text-certvoice-text truncate">
+                                {cert.installationAddress}
+                              </div>
+                              <div className="text-xs text-certvoice-muted mt-0.5">
+                                {cert.clientName}
+                                {cert.reportNumber ? ` · ${cert.reportNumber}` : ''}
+                              </div>
                             </div>
-                            <div className="text-xs text-certvoice-muted mt-0.5">
-                              {cert.clientName}
-                              {cert.reportNumber ? ` · ${cert.reportNumber}` : ''}
+                            <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                              {/* Cert type badge */}
+                              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                isMW
+                                  ? 'bg-certvoice-amber/15 text-certvoice-amber'
+                                  : isEIC
+                                    ? 'bg-emerald-500/15 text-emerald-400'
+                                    : 'bg-certvoice-accent/15 text-certvoice-accent'
+                              }`}>
+                                {isMW ? 'MW' : isEIC ? 'EIC' : 'EICR'}
+                              </span>
+                              {cert.overallAssessment && (
+                                <span
+                                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                    cert.overallAssessment === 'SATISFACTORY'
+                                      ? 'cv-badge-pass'
+                                      : 'cv-badge-fail'
+                                  }`}
+                                >
+                                  {cert.overallAssessment === 'SATISFACTORY' ? 'SAT' : 'UNSAT'}
+                                </span>
+                              )}
+                              <span className={`${config.badgeClass} shrink-0`}>
+                                <StatusIcon className="w-3 h-3 inline mr-1" />
+                                {config.label}
+                              </span>
                             </div>
                           </div>
-                          <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                            {/* Cert type badge */}
-                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                              isMW
-                                ? 'bg-certvoice-amber/15 text-certvoice-amber'
-                                : isEIC
-                                  ? 'bg-emerald-500/15 text-emerald-400'
-                                  : 'bg-certvoice-accent/15 text-certvoice-accent'
-                            }`}>
-                              {isMW ? 'MW' : isEIC ? 'EIC' : 'EICR'}
-                            </span>
 
-                            {cert.overallAssessment && (
-                              <span
-                                className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                                  cert.overallAssessment === 'SATISFACTORY'
-                                    ? 'cv-badge-pass'
-                                    : 'cv-badge-fail'
-                                }`}
-                              >
-                                {cert.overallAssessment === 'SATISFACTORY' ? 'SAT' : 'UNSAT'}
+                          {/* Stats row */}
+                          <div className="flex items-center gap-3 text-xs">
+                            {isMW ? (
+                              <span className="text-certvoice-muted truncate max-w-[200px]">
+                                {cert.descriptionOfWork || 'No description'}
+                              </span>
+                            ) : (
+                              <>
+                                <span className="text-certvoice-muted">
+                                  {cert.circuitCount} circuit{cert.circuitCount !== 1 ? 's' : ''}
+                                </span>
+                                {C1 > 0 && (
+                                  <span className="cv-code-c1 text-[10px] px-1.5 py-0.5 rounded">C1: {C1}</span>
+                                )}
+                                {C2 > 0 && (
+                                  <span className="cv-code-c2 text-[10px] px-1.5 py-0.5 rounded">C2: {C2}</span>
+                                )}
+                                {C3 > 0 && (
+                                  <span className="cv-code-c3 text-[10px] px-1.5 py-0.5 rounded">C3: {C3}</span>
+                                )}
+                                {FI > 0 && (
+                                  <span className="cv-code-fi text-[10px] px-1.5 py-0.5 rounded">FI: {FI}</span>
+                                )}
+                              </>
+                            )}
+                            {cert.hasPdf && (
+                              <Download className="w-3 h-3 text-certvoice-green ml-auto shrink-0" />
+                            )}
+                            {!cert.hasPdf && (
+                              <span className="text-certvoice-muted ml-auto">
+                                {cert.updatedAt ? formatTimeAgo(cert.updatedAt) : ''}
                               </span>
                             )}
-                            <span className={`${config.badgeClass} shrink-0`}>
-                              <StatusIcon className="w-3 h-3 inline mr-1" />
-                              {config.label}
-                            </span>
                           </div>
-                        </div>
 
-                        {/* Stats row */}
-                        <div className="flex items-center gap-3 text-xs">
-                          {isMW ? (
-                            <span className="text-certvoice-muted truncate max-w-[200px]">
-                              {cert.descriptionOfWork || 'No description'}
+                          {/* Date row */}
+                          <div className="flex items-center justify-between mt-2">
+                            <span className="text-[10px] text-certvoice-muted/60">
+                              {isMW
+                                ? `Completed: ${cert.inspectionDate ? formatDate(cert.inspectionDate) : '—'}`
+                                : `Inspected: ${cert.inspectionDate ? formatDate(cert.inspectionDate) : '—'}`}
+                              {cert.isLocal && ' · Local only'}
                             </span>
-                          ) : (
-                            <>
-                              <span className="text-certvoice-muted">
-                                {cert.circuitCount} circuit{cert.circuitCount !== 1 ? 's' : ''}
-                              </span>
-
-                              {C1 > 0 && (
-                                <span className="cv-code-c1 text-[10px] px-1.5 py-0.5 rounded">C1: {C1}</span>
-                              )}
-                              {C2 > 0 && (
-                                <span className="cv-code-c2 text-[10px] px-1.5 py-0.5 rounded">C2: {C2}</span>
-                              )}
-                              {C3 > 0 && (
-                                <span className="cv-code-c3 text-[10px] px-1.5 py-0.5 rounded">C3: {C3}</span>
-                              )}
-                              {FI > 0 && (
-                                <span className="cv-code-fi text-[10px] px-1.5 py-0.5 rounded">FI: {FI}</span>
-                              )}
-                            </>
-                          )}
-
-                          {cert.hasPdf && (
-                            <Download className="w-3 h-3 text-certvoice-green ml-auto shrink-0" />
-                          )}
-                          {!cert.hasPdf && (
-                            <span className="text-certvoice-muted ml-auto">
-                              {cert.updatedAt ? formatTimeAgo(cert.updatedAt) : ''}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Date row */}
-                        <div className="flex items-center justify-between mt-2">
-                          <span className="text-[10px] text-certvoice-muted/60">
-                            {isMW
-                              ? `Completed: ${cert.inspectionDate ? formatDate(cert.inspectionDate) : '—'}`
-                              : `Inspected: ${cert.inspectionDate ? formatDate(cert.inspectionDate) : '—'}`}
-                            {cert.isLocal && ' · Local only'}
-                          </span>
-                          <ChevronRight className="w-3 h-3 text-certvoice-muted/40" />
-                        </div>
-                      </Link>
+                            <ChevronRight className="w-3 h-3 text-certvoice-muted/40" />
+                          </div>
+                        </Link>
+                      </div>
                     )
                   })
                 )}
@@ -599,6 +663,90 @@ export default function Certificates() {
           <div className="h-8" />
         </div>
       </div>
+
+      {/* ── Delete Confirmation Modal ── */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4"
+          onClick={() => { if (!deleting) setDeleteTarget(null) }}
+        >
+          <div
+            className="bg-certvoice-surface border border-certvoice-border rounded-xl max-w-sm w-full p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Icon */}
+            <div className="flex justify-center">
+              <div className="w-12 h-12 rounded-full bg-red-500/15 flex items-center justify-center">
+                <AlertTriangle className="w-6 h-6 text-red-400" />
+              </div>
+            </div>
+
+            {/* Title */}
+            <h3 className="text-base font-bold text-certvoice-text text-center">
+              Delete Certificate?
+            </h3>
+
+            {/* Details */}
+            <div className="bg-certvoice-bg rounded-lg p-3 space-y-1">
+              <p className="text-sm font-semibold text-certvoice-text truncate">
+                {deleteTarget.installationAddress}
+              </p>
+              <p className="text-xs text-certvoice-muted">
+                {deleteTarget.clientName}
+                {deleteTarget.reportNumber ? ` · ${deleteTarget.reportNumber}` : ''}
+              </p>
+              <p className="text-xs text-certvoice-muted">
+                {getCertTypeLabel(deleteTarget.certificateType)} · {getStatusConfig(deleteTarget.status).label}
+              </p>
+            </div>
+
+            {/* Warning text */}
+            <p className="text-xs text-certvoice-muted text-center leading-relaxed">
+              This will permanently delete this certificate and all its data including circuits, observations, and test results. This cannot be undone.
+            </p>
+
+            {/* Error */}
+            {deleteError && (
+              <div className="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 rounded-lg p-2">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                {deleteError}
+              </div>
+            )}
+
+            {/* Buttons */}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="flex-1 px-4 py-2.5 rounded-lg border border-certvoice-border text-sm font-semibold
+                           text-certvoice-muted hover:text-certvoice-text transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="flex-1 px-4 py-2.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-semibold
+                           transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {deleting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
