@@ -730,7 +730,7 @@ export default function LandingPage() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-w-3xl mx-auto">
-                <ComplianceBadge label="BS 7671:2018+A2:2022" />
+                <ComplianceBadge label="BS 7671:2018+A4:2026" />
                 <ComplianceBadge label="All 31 circuit columns" />
                 <ComplianceBadge label="Full inspection schedule" />
                 <ComplianceBadge label="Section I & J included" />
