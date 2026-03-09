@@ -1,7 +1,7 @@
 /**
  * CertVoice — BS 7671 Lookup Tables
  *
- * Based on: IET BS 7671:2018+A2:2022
+ * Based on: IET BS 7671:2018+A4:2026
  * Tables 41.2, 41.3, 41.4, and related references.
  *
  * These tables power:
