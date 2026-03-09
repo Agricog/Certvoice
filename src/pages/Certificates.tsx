@@ -30,7 +30,6 @@ import {
   Award,
   Trash2,
   AlertTriangle,
-  X,
 } from 'lucide-react'
 import type {
   EICRCertificate,
