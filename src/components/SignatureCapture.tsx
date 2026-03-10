@@ -110,7 +110,7 @@ export default function SignatureCapture({
 
   const startDraw = useCallback(
     (e: React.TouchEvent | React.MouseEvent) => {
-      if (disabled || state === 'saved' || state === 'uploading') return
+      if (disabled || (state === 'saved' && previewUrl) || state === 'uploading') return
       e.preventDefault()
       const point = getPoint(e)
       if (!point) return
@@ -301,7 +301,7 @@ export default function SignatureCapture({
           <button
             type="button"
             onClick={clearCanvas}
-            disabled={!hasStrokes || state === 'uploading'}
+            disabled={(!hasStrokes && state !== 'saved') || state === 'uploading'}
             className="flex-1 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 transition-colors"
           >
             Clear
