@@ -22,6 +22,10 @@
  *   - Firefox: Always MediaRecorder (no Web Speech API)
  *   - Chrome/Edge on Android/Desktop: Web Speech API (free, live transcript)
  *
+ * Wake Lock:
+ *   - Acquires Screen Wake Lock during recording to prevent phone dimming/locking
+ *   - Released on stop, reset, or unmount
+ *
  * Privacy:
  *   - Web Speech path: audio processed by Google's speech service (never hits CertVoice)
  *   - MediaRecorder path: audio sent to CertVoice speech-to-text worker (Whisper on Cloudflare)
@@ -182,6 +186,9 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
   const selectedMimeRef = useRef<string>('audio/webm')
   const resolveStopRef = useRef<((blob: Blob | null) => void) | null>(null)
 
+  // Wake Lock ref — prevents screen dimming/locking during recording
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null)
+
   // ============================================================
   // CLEANUP
   // ============================================================
@@ -200,6 +207,11 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach((t) => t.stop())
         mediaStreamRef.current = null
+      }
+      // Wake Lock cleanup
+      if (wakeLockRef.current) {
+        wakeLockRef.current.release().catch(() => {})
+        wakeLockRef.current = null
       }
       // Timer cleanup
       if (durationTimerRef.current) {
@@ -227,6 +239,25 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
     }
     if (startTimeRef.current > 0) {
       setDurationMs(Date.now() - startTimeRef.current)
+    }
+  }, [])
+
+  // ============================================================
+  // WAKE LOCK (shared)
+  // ============================================================
+
+  const acquireWakeLock = useCallback(async () => {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLockRef.current = await navigator.wakeLock.request('screen')
+      }
+    } catch { /* not supported or denied — ignore */ }
+  }, [])
+
+  const releaseWakeLock = useCallback(() => {
+    if (wakeLockRef.current) {
+      wakeLockRef.current.release().catch(() => {})
+      wakeLockRef.current = null
     }
   }, [])
 
@@ -296,6 +327,7 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
     recognition.onstart = () => {
       setStatus('recording')
       startDurationTimer()
+      acquireWakeLock()
     }
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
@@ -325,12 +357,14 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
       if (event.error === 'aborted' && stoppedManuallyRef.current) return
 
       stopDurationTimer()
+      releaseWakeLock()
       setError(mapSpeechError(event.error))
       setStatus('error')
     }
 
     recognition.onend = () => {
       stopDurationTimer()
+      releaseWakeLock()
       setStatus((prev) => (prev === 'error' ? prev : 'idle'))
     }
 
@@ -342,7 +376,7 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
       setError({ type: 'unknown', message: 'Failed to start recording. Please try again.' })
       setStatus('error')
     }
-  }, [startDurationTimer, stopDurationTimer, mapSpeechError])
+  }, [startDurationTimer, stopDurationTimer, acquireWakeLock, releaseWakeLock, mapSpeechError])
 
   // ============================================================
   // WEB SPEECH API — STOP (returns transcript immediately)
@@ -357,6 +391,7 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
     }
 
     stopDurationTimer()
+    releaseWakeLock()
 
     const final = finalTextRef.current.trim()
     setFinalTranscript(final)
@@ -364,7 +399,7 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
     setStatus('idle')
 
     return final
-  }, [stopDurationTimer])
+  }, [stopDurationTimer, releaseWakeLock])
 
   // ============================================================
   // MEDIA RECORDER — START
@@ -405,6 +440,7 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
 
       recorder.onerror = () => {
         stopDurationTimer()
+        releaseWakeLock()
         setError({ type: 'unknown', message: 'Recording failed unexpectedly. Please try again.' })
         setStatus('error')
         stream.getTracks().forEach((t) => t.stop())
@@ -426,6 +462,7 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
       setStatus('recording')
       setLiveTranscript('Listening...')
       startDurationTimer()
+      acquireWakeLock()
     } catch (err) {
       setError(mapMediaError(err))
       setStatus('error')
@@ -435,7 +472,7 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
         mediaStreamRef.current = null
       }
     }
-  }, [startDurationTimer, stopDurationTimer, mapMediaError])
+  }, [startDurationTimer, stopDurationTimer, acquireWakeLock, releaseWakeLock, mapMediaError])
 
   // ============================================================
   // MEDIA RECORDER — STOP + TRANSCRIBE
@@ -443,6 +480,7 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
 
   const stopMediaRecorder = useCallback(async (): Promise<string> => {
     stopDurationTimer()
+    releaseWakeLock()
 
     const recorder = mediaRecorderRef.current
     if (!recorder || recorder.state === 'inactive') {
@@ -532,7 +570,7 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
       setLiveTranscript('')
       return ''
     }
-  }, [stopDurationTimer, getToken])
+  }, [stopDurationTimer, releaseWakeLock, getToken])
 
   // ============================================================
   // UNIFIED START
@@ -590,8 +628,9 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
       mediaStreamRef.current = null
     }
 
-    // Timer cleanup
+    // Timer + wake lock cleanup
     stopDurationTimer()
+    releaseWakeLock()
 
     // Reset all state
     stoppedManuallyRef.current = false
@@ -604,7 +643,7 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
     setFinalTranscript('')
     setError(null)
     setDurationMs(0)
-  }, [isSupported, stopDurationTimer])
+  }, [isSupported, stopDurationTimer, releaseWakeLock])
 
   return {
     status,
