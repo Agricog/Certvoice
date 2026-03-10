@@ -636,7 +636,7 @@ function drawInspectionPages(
       color: COLOURS.muted,
     })
 
-    page.drawText(sanitize((item.description ?? '').substring(0, 70)), {
+    page.drawText(sanitize((item.description ?? '').substring(0, 95)), {
       x: PAGE.marginLeft + 40,
       y,
       size: FONT.tableBody,
