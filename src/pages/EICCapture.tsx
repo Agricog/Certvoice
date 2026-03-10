@@ -629,6 +629,8 @@ export default function EICCapture() {
           title: `EIC — ${reportNumber ?? ''}`,
           text: `Electrical Installation Certificate for ${installationDetails.installationAddress ?? 'property'}`,
         })
+      } else {
+        window.open(pdfReady.url, '_blank')
       }
     } catch (err) {
       if ((err as Error).name !== 'AbortError') captureError(err, 'EICCapture.handleSharePdf')
