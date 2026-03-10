@@ -1313,7 +1313,12 @@ export default function InspectionCapture() {
               <Zap className="w-4 h-4 text-certvoice-accent shrink-0" />
               {address}
             </h1>
-            <p className="text-[10px] text-certvoice-muted">
+            <p className="text-[10px] text-certvoice-muted flex items-center gap-1.5">
+              {certificate.certificateType && (
+                <span className="bg-certvoice-accent/15 text-certvoice-accent font-bold px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide">
+                  {certificate.certificateType}
+                </span>
+              )}
               {certificate.reportNumber ?? ''} ·{' '}
               {certificate.clientDetails?.clientName ?? ''}
             </p>
