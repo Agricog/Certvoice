@@ -189,9 +189,11 @@ export default function InspectionCapture() {
       if (navigator.share && navigator.canShare?.({ files: [file] })) {
         await navigator.share({
           files: [file],
-          title: `EICR Report — ${certificate.reportNumber ?? ''}`,
-          text: `EICR inspection report for ${certificate.installationDetails?.installationAddress ?? 'property'}`,
+          title: `EIC — ${reportNumber ?? ''}`,
+          text: `Electrical Installation Certificate for ${installationDetails.installationAddress ?? 'property'}`,
         })
+      } else {
+        window.open(pdfReady.url, '_blank')
       } else {
         // Fallback: copy download link (mobile browsers that don't support file sharing)
         const link = document.createElement('a')
