@@ -10,13 +10,14 @@
  * circuits without manual typing. AI-extracted fields merge into existing
  * data — board scan fields (circuit number, description, MCB) are preserved.
  *
+ * Voice strategy: Uses useVoiceCapture hook which auto-selects:
+ *   - Web Speech API on Chrome/Edge desktop & Android (free, live transcript)
+ *   - MediaRecorder + Whisper on iOS/Safari/Firefox (server-side transcription)
+ *
  * Confidence UX:
  *   - AI-extracted fields show amber highlight when confidence < 0.7
  *   - "Low confidence — verify this value" hint on amber fields
  *   - Voice transcript stored for evidence trail
- *
- * Props match what InspectionCapture already passes.
- * All form values map to CircuitDetail via mapFormToCircuitDetail().
  *
  * @module components/CircuitRecorder
  */
@@ -24,6 +25,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { useAuth } from '@clerk/clerk-react'
 import { Mic, MicOff, ChevronDown, ChevronUp, Check, X, AlertTriangle, Loader2 } from 'lucide-react'
 import DOMPurify from 'dompurify'
+import { useVoiceCapture } from '../hooks/useVoiceCapture'
 import type {
   CircuitDetail,
   EarthingType,
@@ -34,6 +36,7 @@ import type {
   TickStatus,
 } from '../types/eicr'
 import { getMaxZs } from '../utils/zsLookup'
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface CircuitFormData {
   circuit_number: string
@@ -66,6 +69,7 @@ interface CircuitFormData {
   spd_fitted: boolean
   comments: string
 }
+
 interface CircuitRecorderProps {
   mode: 'voice' | 'manual'
   locationContext: string
@@ -76,7 +80,9 @@ interface CircuitRecorderProps {
   onCircuitConfirmed: (data: Partial<CircuitDetail>) => void
   onCancel: () => void
 }
-type RecorderStep = 'idle' | 'recording' | 'transcribing' | 'extracting' | 'review'
+
+type RecorderStep = 'idle' | 'recording' | 'extracting' | 'review'
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 const EMPTY_FORM: CircuitFormData = {
   circuit_number: '',
@@ -109,8 +115,10 @@ const EMPTY_FORM: CircuitFormData = {
   spd_fitted: false,
   comments: '',
 }
+
 /** Fields below this confidence score get amber highlighting */
 const CONFIDENCE_THRESHOLD = 0.7
+
 /** BS 7671 Appendix 6 Column 3 codes */
 const WIRING_TYPES: { code: WiringTypeCode; label: string }[] = [
   { code: 'A', label: 'A — T&E' },
@@ -123,6 +131,7 @@ const WIRING_TYPES: { code: WiringTypeCode; label: string }[] = [
   { code: 'H', label: 'H — MI' },
   { code: 'O', label: 'O — Other' },
 ]
+
 const REFERENCE_METHODS: ReferenceMethod[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
 const OCPD_TYPES: OCPDType[] = ['B', 'C', 'D']
 const RCD_TYPES: RCDType[] = ['AC', 'A', 'F', 'B', 'S']
@@ -133,21 +142,25 @@ const TICK_OPTIONS: { value: TickStatus; label: string }[] = [
 ]
 const COMMON_RATINGS = ['6', '10', '16', '20', '25', '32', '40', '45', '50', '63', '80', '100']
 const COMMON_CSA = ['1.0', '1.5', '2.5', '4.0', '6.0', '10.0', '16.0', '25.0']
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function sanitize(value: string): string {
   return DOMPurify.sanitize(value.trim(), { ALLOWED_TAGS: [] })
 }
+
 function isZsExceeded(measured: string, max: string): boolean {
   const m = parseFloat(measured)
   const x = parseFloat(max)
   if (isNaN(m) || isNaN(x) || x === 0) return false
   return m > x
 }
+
 function toNum(val: string): number | null {
   if (!val.trim()) return null
   const n = parseFloat(val)
   return isNaN(n) ? null : n
 }
+
 /** Like toNum but preserves special IR string values: ">200", "LIM", "N/V" */
 function toNumOrSpecial(val: string): number | string | null {
   if (!val.trim()) return null
@@ -158,11 +171,13 @@ function toNumOrSpecial(val: string): number | string | null {
   const n = parseFloat(trimmed)
   return isNaN(n) ? null : n
 }
+
 /** Convert a numeric value (or null) back to a form string */
 function numToStr(val: number | string | null | undefined): string {
   if (val == null) return ''
   return String(val)
 }
+
 function mapFormToCircuitDetail(f: CircuitFormData): Partial<CircuitDetail> {
   const irLL = toNumOrSpecial(f.insulation_live_live)
   const irLE = toNumOrSpecial(f.insulation_live_earth)
@@ -201,6 +216,7 @@ function mapFormToCircuitDetail(f: CircuitFormData): Partial<CircuitDetail> {
     status: isComplete ? 'SATISFACTORY' : 'INCOMPLETE',
   }
 }
+
 /** Reverse map: CircuitDetail → form data for pre-populating edit mode */
 function mapCircuitDetailToForm(c: Partial<CircuitDetail>): CircuitFormData {
   return {
@@ -235,6 +251,7 @@ function mapCircuitDetailToForm(c: Partial<CircuitDetail>): CircuitFormData {
     comments: c.remarks ?? '',
   }
 }
+
 // ─── Section Component ────────────────────────────────────────────────────────
 function FormSection({
   title,
@@ -260,6 +277,7 @@ function FormSection({
     </div>
   )
 }
+
 // ─── Field Components ─────────────────────────────────────────────────────────
 function TextField({
   label,
@@ -319,6 +337,7 @@ function TextField({
     </div>
   )
 }
+
 function SelectField<T extends string>({
   label,
   value,
@@ -360,6 +379,7 @@ function SelectField<T extends string>({
     </div>
   )
 }
+
 function TickField({
   label,
   value,
@@ -395,6 +415,7 @@ function TickField({
     </div>
   )
 }
+
 function ToggleField({
   label,
   value,
@@ -425,6 +446,7 @@ function ToggleField({
     </button>
   )
 }
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function CircuitRecorder({
   mode,
@@ -437,6 +459,17 @@ export default function CircuitRecorder({
   onCancel,
 }: CircuitRecorderProps) {
   const { getToken } = useAuth()
+
+  // ── useVoiceCapture hook — handles Chrome Web Speech + iOS/Safari Whisper ──
+  const {
+    status: voiceStatus,
+    liveTranscript,
+    error: voiceError,
+    startRecording: startVoice,
+    stopRecording: stopVoice,
+    reset: resetVoice,
+  } = useVoiceCapture()
+
   const [step, setStep] = useState<RecorderStep>(mode === 'manual' ? 'review' : 'idle')
   const [formData, setFormData] = useState<CircuitFormData>(() => {
     if (editingCircuit) return mapCircuitDetailToForm(editingCircuit)
@@ -444,7 +477,8 @@ export default function CircuitRecorder({
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const maxZsManualRef = useRef(!!editingCircuit?.maxPermittedZs) // don't auto-overwrite when editing
+  const maxZsManualRef = useRef(!!editingCircuit?.maxPermittedZs)
+
   // Voice transcript + AI confidence state
   const [voiceTranscript, setVoiceTranscript] = useState<string | null>(
     editingCircuit?.voiceTranscript ?? null
@@ -452,14 +486,8 @@ export default function CircuitRecorder({
   const [fieldConfidence, setFieldConfidence] = useState<Record<string, number> | null>(
     editingCircuit?.fieldConfidence ?? null
   )
-  // Voice recording state
-  const [isRecording, setIsRecording] = useState(false)
-  const [audioLevel, setAudioLevel] = useState(0)
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const audioChunksRef = useRef<Blob[]>([])
-  const analyserRef = useRef<AnalyserNode | null>(null)
-  const animFrameRef = useRef<number | null>(null)
-  /** Check if a field has low AI confidence (below threshold) */
+
+  /** Check if a field has low AI confidence */
   const isLowConfidence = useCallback(
     (fieldKey: string): boolean => {
       if (!fieldConfidence) return false
@@ -468,81 +496,38 @@ export default function CircuitRecorder({
     },
     [fieldConfidence]
   )
-  // ── Voice recording ───────────────────────────────────────────────────────
-  const startRecording = useCallback(async () => {
-    try {
-      setError(null)
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      // Audio level visualisation
-      const audioCtx = new AudioContext()
-      const source = audioCtx.createMediaStreamSource(stream)
-      const analyser = audioCtx.createAnalyser()
-      analyser.fftSize = 256
-      source.connect(analyser)
-      analyserRef.current = analyser
-      const dataArray = new Uint8Array(analyser.frequencyBinCount)
-      const updateLevel = () => {
-        analyser.getByteFrequencyData(dataArray)
-        const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length
-        setAudioLevel(avg / 255)
-        animFrameRef.current = requestAnimationFrame(updateLevel)
-      }
-      updateLevel()
-      // MediaRecorder — use webm where supported, fall back to mp4 for Safari
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/mp4'
-      const recorder = new MediaRecorder(stream, { mimeType })
-      audioChunksRef.current = []
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data)
-      }
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop())
-        if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
-        setAudioLevel(0)
-        const blob = new Blob(audioChunksRef.current, { type: mimeType })
-        await transcribeAudio(blob)
-      }
-      mediaRecorderRef.current = recorder
-      recorder.start()
-      setIsRecording(true)
+
+  // ── Sync step with voice hook status ─────────────────────────────────────
+  useEffect(() => {
+    if (voiceStatus === 'recording') {
       setStep('recording')
-    } catch {
-      setError('Microphone access denied. Check browser permissions.')
     }
-  }, [])
-  const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop()
-      setIsRecording(false)
-      setStep('transcribing')
-    }
-  }, [])
-  const transcribeAudio = async (blob: Blob) => {
+  }, [voiceStatus])
+
+  // ── Handle start ──────────────────────────────────────────────────────────
+  const handleStartRecording = useCallback(() => {
+    setError(null)
+    startVoice()
+  }, [startVoice])
+
+  // ── Handle stop — hook returns transcript directly ────────────────────────
+  const handleStopRecording = useCallback(async () => {
+    setStep('extracting')
     try {
-      const token = await getToken()
-      const apiBase = import.meta.env.VITE_API_BASE_URL
-      const res = await fetch(`${apiBase}/api/speech/transcribe`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': blob.type,
-        },
-        body: blob,
-      })
-      if (!res.ok) throw new Error(`Transcription failed (${res.status})`)
-      const data = await res.json()
-      if (!data.success || !data.transcript) {
-        throw new Error('No transcript returned')
+      const transcript = await stopVoice()
+      if (!transcript) {
+        setError('No speech detected. Please try again.')
+        setStep('idle')
+        return
       }
-      setStep('extracting')
-      await extractCircuitData(data.transcript)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Transcription failed')
-      setStep('review')
+      await extractCircuitData(transcript)
+    } catch {
+      setError('Voice capture failed. Please try again.')
+      setStep('idle')
     }
-  }
+  }, [stopVoice])
+
+  // ── AI extraction (unchanged) ─────────────────────────────────────────────
   const extractCircuitData = async (transcript: string) => {
     try {
       const token = await getToken()
@@ -559,9 +544,6 @@ export default function CircuitRecorder({
       const data = await res.json()
       if (data.success && data.circuit) {
         const c = data.circuit
-        // MERGE: only overwrite fields that the AI actually extracted (non-null).
-        // This preserves board-scan data (circuit number, description, MCB type/rating)
-        // while filling in test results from voice.
         setFormData((prev) => ({
           ...prev,
           circuit_number: c.circuitNumber ?? prev.circuit_number,
@@ -590,11 +572,9 @@ export default function CircuitRecorder({
         }))
         if (data.fieldConfidence) setFieldConfidence(data.fieldConfidence)
       }
-      // Store transcript for evidence trail
       setVoiceTranscript(transcript)
       setStep('review')
     } catch {
-      // If extraction fails, still show review grid with transcript in comments
       setFormData((prev) => ({
         ...prev,
         comments: prev.comments
@@ -605,6 +585,7 @@ export default function CircuitRecorder({
       setStep('review')
     }
   }
+
   // ── Form handlers ─────────────────────────────────────────────────────────
   const updateField = useCallback(
     <K extends keyof CircuitFormData>(key: K, value: CircuitFormData[K]) => {
@@ -612,8 +593,8 @@ export default function CircuitRecorder({
     },
     []
   )
+
   const handleConfirm = async () => {
-    // Sanitize all string fields before submission
     const sanitized: CircuitFormData = { ...formData }
     for (const key of Object.keys(sanitized) as (keyof CircuitFormData)[]) {
       const val = sanitized[key]
@@ -621,7 +602,6 @@ export default function CircuitRecorder({
         ;(sanitized[key] as string) = sanitize(val)
       }
     }
-    // Basic validation — circuit number is required
     if (!sanitized.circuit_number.trim()) {
       setError('Circuit number is required')
       return
@@ -632,7 +612,6 @@ export default function CircuitRecorder({
       const mapped = mapFormToCircuitDetail(sanitized)
       onCircuitConfirmed({
         ...mapped,
-        // Preserve the original id when editing so the parent merges rather than appends
         ...(editingCircuit?.id ? { id: editingCircuit.id } : {}),
         voiceTranscript: voiceTranscript ?? undefined,
         fieldConfidence: fieldConfidence ?? undefined,
@@ -643,13 +622,14 @@ export default function CircuitRecorder({
       setIsSubmitting(false)
     }
   }
+
   // ── Zs warning ────────────────────────────────────────────────────────────
   const zsWarning = isZsExceeded(formData.measured_zs, formData.max_zs)
     ? `Measured Zs (${formData.measured_zs}Ω) exceeds max permitted (${formData.max_zs}Ω)`
     : undefined
-  // ── Auto-fill max Zs from BS 7671 lookup ──────────────────────────────────
+
+  // ── Auto-fill max Zs ──────────────────────────────────────────────────────
   useEffect(() => {
-    // Don't overwrite if user manually edited the field or editing existing circuit
     if (maxZsManualRef.current) return
     const rating = parseFloat(formData.ocpd_rating)
     const disconnectTime = parseFloat(formData.max_disconnection_time) || null
@@ -658,20 +638,24 @@ export default function CircuitRecorder({
       setFormData((prev) => ({ ...prev, max_zs: calculated.toFixed(2) }))
     }
   }, [formData.ocpd_type, formData.ocpd_rating, formData.max_disconnection_time])
+
   // ── Cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
-      if (mediaRecorderRef.current?.state === 'recording') {
-        mediaRecorderRef.current.stop()
-      }
+      resetVoice()
     }
-  }, [])
-  // ── Render: Voice capture steps (full-screen overlay) ─────────────────────
+  }, [resetVoice])
+
+  // ── Derive display state from hook ────────────────────────────────────────
+  const isRecording = voiceStatus === 'recording'
+  const isProcessing = voiceStatus === 'processing' || step === 'extracting'
+  const displayError = error ?? (voiceError?.message ?? null)
+
+  // ── Render: Voice capture (idle or recording) ─────────────────────────────
   if (step === 'idle' || step === 'recording') {
     return (
       <div className="fixed inset-0 bg-slate-950/95 z-50 flex flex-col items-center justify-center p-6">
-        <div className="text-center max-w-sm">
+        <div className="text-center max-w-sm w-full">
           <h2 className="text-white text-lg font-semibold mb-2">
             {editingCircuit ? 'Voice Test Results' : 'Record Circuit Details'}
           </h2>
@@ -680,25 +664,25 @@ export default function CircuitRecorder({
               ? `Speak the test results for Cct ${formData.circuit_number} — Zs, R1+R2, insulation, polarity, RCD.`
               : 'Describe the circuit — number, description, cable type, protective device, test results.'}
           </p>
-          {/* Mic button with audio level ring */}
+
+          {/* Live transcript */}
+          {isRecording && liveTranscript && (
+            <div className="mb-6 p-3 bg-slate-800/80 border border-slate-600 rounded-lg text-left">
+              <p className="text-xs text-slate-400 mb-1">Live transcript</p>
+              <p className="text-white text-sm font-mono leading-relaxed">{liveTranscript}</p>
+            </div>
+          )}
+
+          {/* Mic button */}
           <button
             type="button"
-            onClick={isRecording ? stopRecording : startRecording}
+            onClick={isRecording ? handleStopRecording : handleStartRecording}
             className="relative mx-auto mb-6 block"
           >
             <div
               className={`w-24 h-24 rounded-full flex items-center justify-center transition-colors ${
-                isRecording ? 'bg-red-600' : 'bg-blue-600 hover:bg-blue-500'
+                isRecording ? 'bg-red-600 animate-pulse' : 'bg-blue-600 hover:bg-blue-500'
               }`}
-              style={
-                isRecording
-                  ? {
-                      boxShadow: `0 0 0 ${4 + audioLevel * 20}px rgba(239,68,68,${
-                        0.15 + audioLevel * 0.3
-                      })`,
-                    }
-                  : undefined
-              }
             >
               {isRecording ? (
                 <MicOff size={32} className="text-white" />
@@ -707,17 +691,21 @@ export default function CircuitRecorder({
               )}
             </div>
           </button>
+
           <p className="text-slate-500 text-xs">
             {isRecording ? 'Tap to stop recording' : 'Tap to start recording'}
           </p>
-          {error && (
+
+          {displayError && (
             <div className="mt-4 p-3 bg-red-900/40 border border-red-700 rounded-md text-red-300 text-sm">
-              {error}
+              {displayError}
             </div>
           )}
+
           <button
             type="button"
             onClick={() => {
+              resetVoice()
               if (editingCircuit || mode === 'manual') {
                 setStep('review')
               } else {
@@ -732,17 +720,20 @@ export default function CircuitRecorder({
       </div>
     )
   }
-  if (step === 'transcribing' || step === 'extracting') {
+
+  // ── Render: Processing spinner ────────────────────────────────────────────
+  if (isProcessing) {
     return (
       <div className="fixed inset-0 bg-slate-950/95 z-50 flex flex-col items-center justify-center p-6">
         <Loader2 size={40} className="text-blue-500 animate-spin mb-4" />
         <p className="text-white text-sm">
-          {step === 'transcribing' ? 'Transcribing audio...' : 'Extracting circuit data...'}
+          {voiceStatus === 'processing' ? 'Transcribing audio...' : 'Extracting circuit data...'}
         </p>
       </div>
     )
   }
-  // ── Render: Review grid (shared by voice + manual + edit) ─────────────────
+
+  // ── Render: Review grid ───────────────────────────────────────────────────
   return (
     <div className="fixed inset-0 bg-slate-950 z-50 overflow-y-auto">
       {/* Header */}
@@ -759,11 +750,12 @@ export default function CircuitRecorder({
           {editingCircuit ? 'Edit Circuit' : mode === 'manual' ? 'Manual Entry' : 'Review Circuit'}
         </h2>
         <div className="flex items-center gap-2">
-          {/* ── VOICE BUTTON ON REVIEW GRID ── */}
+          {/* Voice button on review grid */}
           <button
             type="button"
             onClick={() => {
               setError(null)
+              resetVoice()
               setStep('idle')
             }}
             className="flex items-center gap-1 bg-slate-700 hover:bg-slate-600 text-blue-400 text-sm font-medium px-3 py-1.5 rounded-md transition-colors"
@@ -783,20 +775,23 @@ export default function CircuitRecorder({
           </button>
         </div>
       </div>
+
       {/* Error banner */}
-      {error && (
+      {displayError && (
         <div className="mx-4 mt-3 p-3 bg-red-900/40 border border-red-700 rounded-md text-red-300 text-sm flex items-center gap-2">
           <AlertTriangle size={16} />
-          {error}
+          {displayError}
         </div>
       )}
-      {/* Zs exceeded warning banner */}
+
+      {/* Zs exceeded warning */}
       {zsWarning && (
         <div className="mx-4 mt-3 p-3 bg-amber-900/40 border border-amber-600 rounded-md text-amber-300 text-sm flex items-center gap-2">
           <AlertTriangle size={16} />
           {zsWarning}
         </div>
       )}
+
       {/* Confidence banner */}
       {voiceTranscript && fieldConfidence && Object.values(fieldConfidence).some((v) => v < CONFIDENCE_THRESHOLD) && (
         <div className="mx-4 mt-3 p-3 bg-amber-900/20 border border-amber-600/40 rounded-md text-amber-300/80 text-xs flex items-center gap-2">
@@ -804,9 +799,10 @@ export default function CircuitRecorder({
           Some fields have low AI confidence (amber highlighted). Please verify before confirming.
         </div>
       )}
+
       {/* Form sections */}
       <div className="p-4 pb-24">
-        {/* ── Circuit Identity ── */}
+        {/* Circuit Identity */}
         <FormSection title="Circuit Identity" defaultOpen={true}>
           <div className="grid grid-cols-2 gap-3">
             <TextField label="Circuit No." value={formData.circuit_number} onChange={(v) => updateField('circuit_number', v)} placeholder="e.g. 1" lowConfidence={isLowConfidence('circuit_number')} />
@@ -818,7 +814,8 @@ export default function CircuitRecorder({
             <SelectField label="Ref. Method" value={formData.reference_method} onChange={(v) => updateField('reference_method', v as ReferenceMethod | '')} options={REFERENCE_METHODS.map((m) => ({ value: m, label: m }))} lowConfidence={isLowConfidence('reference_method')} />
           </div>
         </FormSection>
-        {/* ── Protective Device ── */}
+
+        {/* Protective Device */}
         <FormSection title="Overcurrent Protective Device" defaultOpen={true}>
           <TextField label="BS(EN)" value={formData.ocpd_bs_en} onChange={(v) => updateField('ocpd_bs_en', v)} placeholder="e.g. 60898" lowConfidence={isLowConfidence('ocpd_bs_en')} />
           <div className="grid grid-cols-3 gap-3">
@@ -828,14 +825,16 @@ export default function CircuitRecorder({
           </div>
           <TextField label="Max Disconnection Time" value={formData.max_disconnection_time} onChange={(v) => updateField('max_disconnection_time', v)} inputMode="decimal" suffix="s" lowConfidence={isLowConfidence('max_disconnection_time')} />
         </FormSection>
-        {/* ── Cable ── */}
+
+        {/* Cable */}
         <FormSection title="Cable" defaultOpen={true}>
           <div className="grid grid-cols-2 gap-3">
             <SelectField label="Live CSA" value={formData.live_csa} onChange={(v) => updateField('live_csa', v)} options={COMMON_CSA.map((c) => ({ value: c, label: `${c} mm²` }))} placeholder="mm²" lowConfidence={isLowConfidence('live_csa')} />
             <SelectField label="CPC CSA" value={formData.cpc_csa} onChange={(v) => updateField('cpc_csa', v)} options={COMMON_CSA.map((c) => ({ value: c, label: `${c} mm²` }))} placeholder="mm²" lowConfidence={isLowConfidence('cpc_csa')} />
           </div>
         </FormSection>
-        {/* ── Test Results ── */}
+
+        {/* Test Results */}
         <FormSection title="Test Results" defaultOpen={true}>
           <div className="grid grid-cols-2 gap-3">
             <TextField label="Max Zs" value={formData.max_zs} onChange={(v) => { maxZsManualRef.current = true; updateField('max_zs', v) }} inputMode="decimal" suffix="Ω" placeholder={formData.ocpd_type && formData.ocpd_rating ? 'Auto' : ''} lowConfidence={isLowConfidence('max_zs')} />
@@ -859,7 +858,8 @@ export default function CircuitRecorder({
             <TickField label="Polarity confirmed" value={formData.polarity_confirmed} onChange={(v) => updateField('polarity_confirmed', v)} />
           </div>
         </FormSection>
-        {/* ── RCD ── */}
+
+        {/* RCD */}
         <FormSection title="RCD" defaultOpen={false}>
           <SelectField label="RCD Type" value={formData.rcd_type} onChange={(v) => updateField('rcd_type', v as RCDType | '')} options={RCD_TYPES.map((t) => ({ value: t, label: t }))} lowConfidence={isLowConfidence('rcd_type')} />
           <div className="grid grid-cols-2 gap-3">
@@ -868,7 +868,8 @@ export default function CircuitRecorder({
           </div>
           <TickField label="Test button operates correctly" value={formData.rcd_test_button_ok} onChange={(v) => updateField('rcd_test_button_ok', v)} />
         </FormSection>
-        {/* ── Additional ── */}
+
+        {/* Additional */}
         <FormSection title="Additional" defaultOpen={false}>
           <div className="flex gap-3 flex-wrap">
             <TickField label="AFDD test button" value={formData.afdd_fitted} onChange={(v) => updateField('afdd_fitted', v)} />
@@ -885,7 +886,8 @@ export default function CircuitRecorder({
             />
           </div>
         </FormSection>
-        {/* ── Voice Transcript ── */}
+
+        {/* Voice Transcript */}
         {voiceTranscript && (
           <FormSection title="Voice Transcript" defaultOpen={false}>
             <div className="bg-slate-800/50 rounded-md p-3 border border-slate-700">
