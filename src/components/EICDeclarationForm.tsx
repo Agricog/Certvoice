@@ -13,7 +13,7 @@
  *
  * Auto-fills from engineer profile on first load (same as EICR).
  *
- * **File: src/components/EICDeclarationForm.tsx** (create new)
+ * v2: Added SignatureCapture pads for each role.
  *
  * @module components/EICDeclarationForm
  */
@@ -38,6 +38,8 @@ import type {
   SchemeBody,
 } from '../types/eic'
 import type { EngineerProfile } from '../types/eicr'
+import SignatureCapture from './SignatureCapture'
+import type { GetToken } from '../services/uploadService'
 
 // ============================================================
 // TYPES
@@ -47,6 +49,8 @@ interface EICDeclarationFormProps {
   declarations: EICDeclarations
   onDeclarationsChange: (updated: EICDeclarations) => void
   engineerProfile: EngineerProfile | null
+  certificateId?: string
+  getToken?: GetToken
   disabled?: boolean
 }
 
@@ -113,24 +117,27 @@ const SCHEME_BODIES: { value: SchemeBody; label: string }[] = [
   { value: 'OTHER', label: 'Other' },
 ]
 
-const ROLE_CONFIG: { key: RoleKey; label: string; icon: typeof Ruler; description: string }[] = [
+const ROLE_CONFIG: { key: RoleKey; label: string; icon: typeof Ruler; description: string; sigLabel: string }[] = [
   {
     key: 'designer',
     label: 'Designer',
     icon: Ruler,
     description: 'I certify that the design of the installation complies with BS 7671',
+    sigLabel: 'Designer Signature',
   },
   {
     key: 'constructor',
     label: 'Constructor',
     icon: HardHat,
     description: 'I certify that the construction complies with BS 7671 and the design',
+    sigLabel: 'Constructor Signature',
   },
   {
     key: 'inspector',
     label: 'Inspector',
     icon: Search,
     description: 'I certify that I have inspected and tested the installation and it complies',
+    sigLabel: 'Inspector Signature',
   },
 ]
 
@@ -152,12 +159,16 @@ export default function EICDeclarationForm({
   declarations,
   onDeclarationsChange,
   engineerProfile,
+  certificateId,
+  getToken,
   disabled = false,
 }: EICDeclarationFormProps) {
   const [expandedRoles, setExpandedRoles] = useState<Set<RoleKey>>(
     new Set(declarations.samePersonAllRoles ? ['designer'] : ['designer', 'constructor', 'inspector'])
   )
   const hasAutoFilled = useRef(false)
+
+  const hasSigSupport = !!(certificateId && getToken)
 
   // ── Auto-fill from engineer profile on first load ─────────────────────
   useEffect(() => {
@@ -243,6 +254,21 @@ export default function EICDeclarationForm({
       onDeclarationsChange(updated)
     },
     [declarations, onDeclarationsChange]
+  )
+
+  // ── Signature handlers ────────────────────────────────────────────────
+  const handleSignatureChange = useCallback(
+    (role: RoleKey, key: string | null) => {
+      updateRole(role, 'signatureKey', key)
+    },
+    [updateRole]
+  )
+
+  const handleQsSignatureChange = useCallback(
+    (key: string | null) => {
+      updateRole('inspector', 'qsSignatureKey', key)
+    },
+    [updateRole]
   )
 
   // ── Auto-fill button ──────────────────────────────────────────────────
@@ -349,7 +375,7 @@ export default function EICDeclarationForm({
 
       {/* Role declarations */}
       {ROLE_CONFIG.map((roleConfig) => {
-        const { key, label, icon: Icon, description } = roleConfig
+        const { key, label, icon: Icon, description, sigLabel } = roleConfig
         const isExpanded = expandedRoles.has(key)
         const complete = isRoleComplete(key)
 
@@ -539,6 +565,20 @@ export default function EICDeclarationForm({
                   )}
                 </div>
 
+                {/* Signature pad */}
+                {hasSigSupport && (
+                  <div className="border-t border-certvoice-border/50 pt-3">
+                    <SignatureCapture
+                      certificateId={certificateId!}
+                      signatureKey={declarations[key].signatureKey}
+                      onSignatureChange={(k) => handleSignatureChange(key, k)}
+                      getToken={getToken!}
+                      label={sigLabel}
+                      disabled={disabled}
+                    />
+                  </div>
+                )}
+
                 {/* QS fields — inspector only */}
                 {key === 'inspector' && (
                   <div className="border-t border-certvoice-border/50 pt-3 space-y-3">
@@ -572,6 +612,18 @@ export default function EICDeclarationForm({
                         />
                       </div>
                     </div>
+
+                    {/* QS Signature pad */}
+                    {hasSigSupport && (
+                      <SignatureCapture
+                        certificateId={certificateId!}
+                        signatureKey={(declarations.inspector as InspectorDeclaration).qsSignatureKey}
+                        onSignatureChange={handleQsSignatureChange}
+                        getToken={getToken!}
+                        label="QS Signature"
+                        disabled={disabled}
+                      />
+                    )}
                   </div>
                 )}
               </div>
