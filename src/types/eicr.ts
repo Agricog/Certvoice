@@ -543,6 +543,8 @@ export interface EICRCertificate {
   reportNumber: string
   /** Certificate status in the app workflow */
   status: CertificateStatus
+  /** Certificate type */
+  certificateType?: 'EICR' | 'EIC' | 'MINOR_WORKS'
   /** Engineer/inspector ID (Clerk user ID) */
   engineerId: string
 
