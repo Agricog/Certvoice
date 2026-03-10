@@ -312,10 +312,35 @@ async function drawDeclarationPage(
   // --- Section F: Recommendations ---
   y = drawSectionHeader(page, fonts.bold, y, 'Section F - Recommendations')
 
+  // Auto-calculate recommendations from observations and premises type
+  const premType = cert.installationDetails?.premisesType
+  const intervalMap: Record<string, string> = {
+    DOMESTIC: '10 years',
+    COMMERCIAL: '5 years',
+    INDUSTRIAL: '3 years',
+  }
+  const defaultInterval = intervalMap[premType ?? ''] ?? '5 years'
+  const defaultReason = premType
+    ? `${premType.charAt(0) + premType.slice(1).toLowerCase()} premises per BS 7671 GN3 Table 3.2`
+    : ''
+
   const nextDate = recs.nextInspectionDate
-  y = drawField(page, fonts.regular, fonts.bold, y, 'Next Inspection Date', nextDate ? new Date(nextDate).toLocaleDateString('en-GB') : '--')
-  y = drawField(page, fonts.regular, fonts.bold, y, 'Reason for Interval', s(recs.reasonForInterval))
-  y = drawField(page, fonts.regular, fonts.bold, y, 'Remedial Urgency', s(recs.remedialUrgency))
+  y = drawField(page, fonts.regular, fonts.bold, y, 'Next Inspection Date', nextDate ? new Date(nextDate).toLocaleDateString('en-GB') : defaultInterval)
+  y = drawField(page, fonts.regular, fonts.bold, y, 'Reason for Interval', s(recs.reasonForInterval) !== '--' ? s(recs.reasonForInterval) : defaultReason || '--')
+
+  // Auto-generate remedial urgency from C1/C2 observations
+  const pdfObs = cert.observations ?? []
+  const hasC1 = pdfObs.some((o) => o.classificationCode === 'C1')
+  const hasC2 = pdfObs.some((o) => o.classificationCode === 'C2')
+  const hasFI = pdfObs.some((o) => o.classificationCode === 'FI')
+  let urgency = s(recs.remedialUrgency)
+  if (urgency === '--') {
+    if (hasC1) urgency = 'DANGER PRESENT — immediate action required'
+    else if (hasC2) urgency = 'Potentially dangerous — urgent remedial action required'
+    else if (hasFI) urgency = 'Further investigation required without delay'
+    else urgency = 'No urgent remedial action required'
+  }
+  y = drawField(page, fonts.regular, fonts.bold, y, 'Remedial Urgency', urgency)
   y -= SPACING.sectionGap
 
   // --- Section G: Declaration ---
