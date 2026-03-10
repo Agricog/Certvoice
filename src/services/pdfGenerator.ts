@@ -299,7 +299,12 @@ async function drawDeclarationPage(
   y = drawSectionHeader(page, fonts.bold, y, 'Section E - Summary of the Condition of the Installation')
   y = drawWrappedField(page, fonts.regular, fonts.bold, y, 'General Condition', s(summary.generalCondition))
 
-  const assessment = summary.overallAssessment ?? ''
+  // Calculate assessment directly from observations (don't rely on stored value)
+  const obs = cert.observations ?? []
+  const hasC1C2FI = obs.some((o) => o.classificationCode === 'C1' || o.classificationCode === 'C2' || o.classificationCode === 'FI')
+  const assessment = obs.length > 0
+    ? (hasC1C2FI ? 'UNSATISFACTORY' : 'SATISFACTORY')
+    : (summary.overallAssessment ?? '')
   const assessColour = assessment === 'SATISFACTORY' ? COLOURS.pass : COLOURS.fail
   y = drawField(page, fonts.regular, fonts.bold, y, 'Overall Assessment', assessment || '--', { valueColour: assessColour })
   y -= SPACING.sectionGap
