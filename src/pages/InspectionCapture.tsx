@@ -1302,6 +1302,7 @@ export default function InspectionCapture() {
         <div className="flex items-center gap-3">
           <Link
             to="/dashboard"
+            onClick={() => persistCertificate(certificate)}
             className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
                        text-certvoice-muted hover:text-certvoice-text hover:border-certvoice-muted transition-colors"
             title="Back to dashboard"
@@ -1379,6 +1380,7 @@ export default function InspectionCapture() {
           {certificate.id && (
             <Link
               to={`/export/niceic/eicr/${certificate.id}`}
+              onClick={() => persistCertificate(certificate)}
               className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
                          text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors"
               title="Export to NICEIC"
@@ -1389,6 +1391,7 @@ export default function InspectionCapture() {
           {certificate.id && (
             <Link
               to={`/export/napit/eicr/${certificate.id}`}
+              onClick={() => persistCertificate(certificate)}
               className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
                          text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors"
               title="Notify NAPIT"
