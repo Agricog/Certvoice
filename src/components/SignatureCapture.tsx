@@ -120,7 +120,7 @@ export default function SignatureCapture({
       setState('drawing')
       lastPoint.current = point
     },
-    [disabled, state, getPoint]
+    [disabled, state, previewUrl, getPoint]
   )
 
   const draw = useCallback(
