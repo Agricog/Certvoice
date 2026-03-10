@@ -1086,6 +1086,8 @@ export default function EICCapture() {
         declarations={declarations}
         onDeclarationsChange={handleDeclarationsChange}
         engineerProfile={engineerProfile}
+        certificateId={certId}
+        getToken={getToken}
         disabled={status === 'ISSUED'}
       />
     </div>
