@@ -83,7 +83,7 @@ import { createDefaultSchedule } from '../data/bs7671Schedule'
 // TYPES
 // ============================================================
 
-type CaptureTab = 'circuits' | 'design' | 'supply' | 'checklist' | 'sign'
+type CaptureTab = 'details' | 'circuits' | 'design' | 'supply' | 'checklist' | 'sign'
 type PageState = 'loading' | 'ready' | 'error'
 type RecorderMode = 'voice' | 'manual' | null
 
@@ -646,6 +646,7 @@ export default function EICCapture() {
   // ============================================================
 
   const TABS: { id: CaptureTab; label: string; icon: typeof Zap; count?: number }[] = [
+    { id: 'details', label: 'Details', icon: FileText },
     { id: 'circuits', label: 'Circuits', icon: CircuitBoard, count: circuits.length },
     { id: 'design', label: 'Design', icon: Ruler, count: departures.length || undefined },
     { id: 'supply', label: 'Supply', icon: Settings2 },
@@ -679,7 +680,48 @@ export default function EICCapture() {
   // ============================================================
   // RENDER: CIRCUITS TAB
   // ============================================================
+  
+  // ============================================================
+  // RENDER: DETAILS TAB
+  // ============================================================
 
+  const renderDetailsTab = () => (
+    <div className="space-y-4">
+      <div className="cv-panel p-4 space-y-3">
+        <h3 className="text-sm font-bold text-certvoice-text">Client Details</h3>
+        <div>
+          <label className="block text-xs font-semibold text-certvoice-text mb-1">Client Name</label>
+          <input type="text" value={clientDetails.clientName} onChange={(e) => updateCert({ clientDetails: { ...clientDetails, clientName: e.target.value } })} placeholder="e.g. Mr Smith" className="cv-input" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-certvoice-text mb-1">Client Address</label>
+          <textarea value={clientDetails.clientAddress} onChange={(e) => updateCert({ clientDetails: { ...clientDetails, clientAddress: e.target.value } })} placeholder="Full address with postcode" rows={2} className="cv-input resize-none" />
+        </div>
+      </div>
+      <div className="cv-panel p-4 space-y-3">
+        <h3 className="text-sm font-bold text-certvoice-text">Installation Details</h3>
+        <div>
+          <label className="block text-xs font-semibold text-certvoice-text mb-1">Installation Address</label>
+          <textarea value={installationDetails.installationAddress} onChange={(e) => updateCert({ installationDetails: { ...installationDetails, installationAddress: e.target.value } })} placeholder="Address of property where work was done" rows={2} className="cv-input resize-none" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-certvoice-text mb-1">Occupier</label>
+          <input type="text" value={installationDetails.occupier ?? ''} onChange={(e) => updateCert({ installationDetails: { ...installationDetails, occupier: e.target.value } })} placeholder="Person at property" className="cv-input" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-certvoice-text mb-1">Premises Type</label>
+          <div className="flex flex-wrap gap-2">
+            {(['DOMESTIC', 'COMMERCIAL', 'INDUSTRIAL', 'OTHER'] as const).map((val) => (
+              <button key={val} type="button" onClick={() => updateCert({ installationDetails: { ...installationDetails, premisesType: val } })}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${installationDetails.premisesType === val ? 'bg-certvoice-accent/15 border-certvoice-accent text-certvoice-accent' : 'bg-certvoice-surface-2 border-certvoice-border text-certvoice-muted hover:border-certvoice-muted'}`}>
+                {val.charAt(0) + val.slice(1).toLowerCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
   const renderCircuitsTab = () => (
     <div className="space-y-3">
       {/* Board selector */}
@@ -1100,6 +1142,7 @@ export default function EICCapture() {
   // ============================================================
 
   const tabRenderers: Record<CaptureTab, () => JSX.Element> = {
+    details: renderDetailsTab,
     circuits: renderCircuitsTab,
     design: renderDesignTab,
     supply: renderSupplyTab,
@@ -1142,56 +1185,48 @@ export default function EICCapture() {
               onSyncNow={() => syncServiceRef.current?.syncNow()}
             />
           )}
-          {pdfReady ? (
-            <>
-              <a href={pdfReady.url} download={pdfReady.filename}
-                title="Download PDF"
-                className="w-8 h-8 rounded-lg border border-certvoice-green flex items-center justify-center
-                           text-certvoice-green hover:bg-certvoice-green/10 transition-colors animate-pulse">
-                <Download className="w-4 h-4" />
-              </a>
-              <button type="button" onClick={handleSharePdf}
-                title="Share PDF"
-                className="w-8 h-8 rounded-lg border border-certvoice-accent flex items-center justify-center
-                           text-certvoice-accent hover:bg-certvoice-accent/10 transition-colors">
-                <Share2 className="w-4 h-4" />
+         <div className="flex items-center gap-1">
+            {pdfReady ? (
+              <>
+                <a href={pdfReady.url} download={pdfReady.filename}
+                  className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border border-certvoice-green text-certvoice-green hover:bg-certvoice-green/10 transition-colors animate-pulse">
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="text-[8px] font-semibold">PDF</span>
+                </a>
+                <button type="button" onClick={handleSharePdf}
+                  className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border border-certvoice-accent text-certvoice-accent hover:bg-certvoice-accent/10 transition-colors">
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span className="text-[8px] font-semibold">Share</span>
+                </button>
+              </>
+            ) : (
+              <button type="button" onClick={handleExportPdf} disabled={isExporting}
+                className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border border-certvoice-border text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors disabled:opacity-50">
+                {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                <span className="text-[8px] font-semibold">PDF</span>
               </button>
-            </>
-          ) : (
-            <button type="button" onClick={handleExportPdf} disabled={isExporting}
-              title="Generate PDF"
-              className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
-                         text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors
-                         disabled:opacity-50 disabled:cursor-not-allowed">
-              {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            )}
+            <button type="button" onClick={handleSave}
+              className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border border-certvoice-border text-certvoice-muted hover:text-certvoice-green hover:border-certvoice-green transition-colors">
+              <Save className="w-3.5 h-3.5" />
+              <span className="text-[8px] font-semibold">Save</span>
             </button>
-          )}
-          <button type="button" onClick={handleSave}
-            title="Save certificate"
-            className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
-                       text-certvoice-muted hover:text-certvoice-green hover:border-certvoice-green transition-colors">
-            <Save className="w-4 h-4" />
-          </button>
-          {certId && (
-            <Link
-              to={`/export/niceic/eic/${certId}`}
-              className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
-                         text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors"
-              title="Export to NICEIC"
-            >
-              <FileOutput className="w-4 h-4" />
-            </Link>
-          )}
-          {certId && (
-            <Link
-              to={`/export/napit/eic/${certId}`}
-              className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
-                         text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors"
-              title="Notify NAPIT"
-            >
-              <FileText className="w-4 h-4" />
-            </Link>
-          )}
+            {certId && (
+              <Link to={`/export/niceic/eic/${certId}`}
+                className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border border-certvoice-border text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors">
+                <FileOutput className="w-3.5 h-3.5" />
+                <span className="text-[8px] font-semibold">NICEIC</span>
+              </Link>
+            )}
+            {certId && (
+              <Link to={`/export/napit/eic/${certId}`}
+                onClick={() => persistCert(certData)}
+                className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border border-certvoice-border text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors">
+                <FileText className="w-3.5 h-3.5" />
+                <span className="text-[8px] font-semibold">NAPIT</span>
+              </Link>
+            )}
+          </div>
         </div>
 
         {/* Validation warnings */}
