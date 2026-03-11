@@ -144,9 +144,17 @@ export default function Home() {
       )
       if (data && !error) {
         const certs = Array.isArray(data) ? data : (data as { data?: Partial<EICRCertificate>[] }).data ?? []
+        const localById = new Map(localItems.map((c) => [c.id, c]))
+        const merged = certs.map((apiCert) => {
+          const local = localById.get(apiCert.id)
+          if (local && (local.circuits?.length || local.observations?.length)) {
+            return { ...apiCert, ...local }
+          }
+          return apiCert
+        })
         const apiIds = new Set(certs.map((c) => c.id))
         const localOnly = localItems.filter((c) => !apiIds.has(c.id))
-        setCertificates([...certs, ...localOnly])
+        setCertificates([...merged, ...localOnly])
       } else if (localItems.length === 0) {
         setCertificates([])
       }
