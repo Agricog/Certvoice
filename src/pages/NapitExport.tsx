@@ -442,7 +442,7 @@ export default function NapitExport() {
               </p>
             </div>
             <a
-              href="https://www.napitonline.co.uk"
+              href="https://www.napitonline.com"
               target="_blank"
               rel="noopener noreferrer"
               onClick={() => trackNapitEvent('portal_opened', resolvedType)}
@@ -720,7 +720,7 @@ export default function NapitExport() {
         {/* ── Footer CTA ── */}
         <div className="pt-2 pb-10 text-center space-y-3">
           <a
-            href="https://www.napitonline.co.uk"
+            href="https://www.napitonline.com"
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => readyToNotify && trackNapitEvent('portal_opened_footer', resolvedType)}
