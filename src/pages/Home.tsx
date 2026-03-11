@@ -360,7 +360,11 @@ export default function Home() {
                   return (
                     <Link
                       key={cert.id}
-                      to={`/inspect/${cert.id}`}
+                      to={
+                        (cert as any).certificateType === 'MINOR_WORKS' ? `/minor-works/${cert.id}`
+                          : (cert as any).certificateType === 'EIC' ? `/eic/${cert.id}`
+                          : `/inspect/${cert.id}`
+                      }
                       state={{ certificate: cert }}
                       className="cv-panel block p-4 hover:border-certvoice-accent/50 transition-colors"
                     >
@@ -375,10 +379,21 @@ export default function Home() {
                             {cert.reportNumber}
                           </div>
                         </div>
-                        <span className={`${config.badgeClass} shrink-0 ml-2`}>
-                          <StatusIcon className="w-3 h-3 inline mr-1" />
-                          {config.label}
-                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                            (cert as any).certificateType === 'MINOR_WORKS'
+                              ? 'bg-certvoice-amber/15 text-certvoice-amber'
+                              : (cert as any).certificateType === 'EIC'
+                                ? 'bg-emerald-500/15 text-emerald-400'
+                                : 'bg-certvoice-accent/15 text-certvoice-accent'
+                          }`}>
+                            {(cert as any).certificateType === 'MINOR_WORKS' ? 'MW' : (cert as any).certificateType === 'EIC' ? 'EIC' : 'EICR'}
+                          </span>
+                          <span className={`${config.badgeClass}`}>
+                            <StatusIcon className="w-3 h-3 inline mr-1" />
+                            {config.label}
+                          </span>
+                        </div>
                       </div>
 
                       {/* Stats row */}
