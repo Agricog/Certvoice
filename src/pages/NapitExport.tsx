@@ -720,15 +720,26 @@ export default function NapitExport() {
         {/* ── Footer CTA ── */}
         <div className="pt-2 pb-10 text-center space-y-3">
           <a
-            href="https://www.napitonline.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={() => readyToNotify && trackNapitEvent('portal_opened_footer', resolvedType)}
-            className={`inline-flex items-center gap-2 cv-btn-primary px-6 py-3 ${!readyToNotify ? 'opacity-50 pointer-events-none' : ''}`}
-          >
-            <ExternalLink className="w-4 h-4" />
-            {readyToNotify ? 'Open NAPIT Portal' : 'Complete required fields first'}
-          </a>
+            {readyToNotify ? (
+            
+              href="https://www.napitonline.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => trackNapitEvent('portal_opened_footer', resolvedType)}
+              className="inline-flex items-center gap-2 cv-btn-primary px-6 py-3"
+            >
+              <ExternalLink className="w-4 h-4" />
+              Open NAPIT Portal
+            </a>
+          ) : (
+            <Link
+              to={id ? `/eic/${id}` : '/dashboard'}
+              className="inline-flex items-center gap-2 cv-btn-primary px-6 py-3"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Complete required fields first
+            </Link>
+          )}
 
           <div className="space-y-1">
             <p className="text-[10px] text-certvoice-muted">
