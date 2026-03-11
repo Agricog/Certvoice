@@ -2,7 +2,7 @@
  * CertVoice — InspectionCapture Page (with Persistence + Offline)
  *
  * Main capture workflow for an EICR inspection.
- * Orchestrates 5 tabs: Circuits, Observations, Supply, Checklist, Declaration.
+ * Orchestrates 6 tabs: Details, Circuits, Observations, Supply, Checklist, Declaration.
  *
  * Persistence strategy:
  *   1. On mount: load certificate from API (online) or IndexedDB (offline)
@@ -74,7 +74,7 @@ import { createDefaultSchedule } from '../data/bs7671Schedule'
 // TYPES
 // ============================================================
 
-type CaptureTab = 'circuits' | 'observations' | 'supply' | 'checklist' | 'declaration'
+type CaptureTab = 'details' | 'circuits' | 'observations' | 'supply' | 'checklist' | 'declaration'
 type PageState = 'loading' | 'ready' | 'error'
 type RecorderMode = 'voice' | 'manual' | null
 
@@ -146,7 +146,7 @@ export default function InspectionCapture() {
 
   // --- Certificate state ---
   const [certificate, setCertificate] = useState<Partial<EICRCertificate>>({})
-  const [activeTab, setActiveTab] = useState<CaptureTab>('circuits')
+  const [activeTab, setActiveTab] = useState<CaptureTab>('details')
   const [activeDbIndex, setActiveDbIndex] = useState(0)
   const [recorderMode, setRecorderMode] = useState<RecorderMode>(null)
   const [showObservationRecorder, setShowObservationRecorder] = useState(false)
@@ -851,6 +851,7 @@ export default function InspectionCapture() {
   // ============================================================
 
   const TABS: { id: CaptureTab; label: string; icon: typeof Zap; count?: number }[] = [
+    { id: 'details', label: 'Details', icon: FileText },
     { id: 'circuits', label: 'Circuits', icon: CircuitBoard, count: circuits.length },
     { id: 'observations', label: 'Observations', icon: AlertTriangle, count: observations.length },
     { id: 'supply', label: 'Supply', icon: Settings2 },
@@ -877,6 +878,98 @@ export default function InspectionCapture() {
         <AlertTriangle className="w-8 h-8 text-certvoice-red mx-auto" />
         <p className="text-sm text-certvoice-red">{loadError ?? 'Something went wrong'}</p>
         <Link to="/" className="cv-btn-secondary inline-block">Back to Dashboard</Link>
+      </div>
+    )
+  }
+
+  // ============================================================
+  // RENDER: DETAILS TAB (Sections A-D)
+  // ============================================================
+  const renderDetailsTab = () => {
+    const client = certificate.clientDetails
+    const reason = certificate.reportReason
+    const install = certificate.installationDetails
+    const extent = certificate.extentAndLimitations
+
+    return (
+      <div className="space-y-3">
+        {/* Section A */}
+        <div className="cv-panel p-3 space-y-2">
+          <h3 className="text-xs font-bold text-certvoice-muted uppercase tracking-wider">A — Client</h3>
+          <div className="cv-data-field">
+            <div className="cv-data-label">Name</div>
+            <div className="cv-data-value">{client?.clientName || '—'}</div>
+          </div>
+          <div className="cv-data-field">
+            <div className="cv-data-label">Address</div>
+            <div className="cv-data-value text-xs whitespace-pre-line">{client?.clientAddress || '—'}</div>
+          </div>
+        </div>
+
+        {/* Section B */}
+        <div className="cv-panel p-3 space-y-2">
+          <h3 className="text-xs font-bold text-certvoice-muted uppercase tracking-wider">B — Reason</h3>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="cv-data-field">
+              <div className="cv-data-label">Purpose</div>
+              <div className="cv-data-value">{reason?.purpose?.replace(/_/g, ' ') || '—'}</div>
+            </div>
+            <div className="cv-data-field">
+              <div className="cv-data-label">Inspection Date</div>
+              <div className="cv-data-value">{reason?.inspectionDates?.[0] || '—'}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Section C */}
+        <div className="cv-panel p-3 space-y-2">
+          <h3 className="text-xs font-bold text-certvoice-muted uppercase tracking-wider">C — Installation</h3>
+          <div className="cv-data-field">
+            <div className="cv-data-label">Address</div>
+            <div className="cv-data-value text-xs whitespace-pre-line">{install?.installationAddress || '—'}</div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="cv-data-field">
+              <div className="cv-data-label">Premises</div>
+              <div className="cv-data-value">{install?.premisesType?.replace(/_/g, ' ') || '—'}</div>
+            </div>
+            <div className="cv-data-field">
+              <div className="cv-data-label">Wiring Age</div>
+              <div className="cv-data-value">{install?.estimatedAgeOfWiring != null ? `~${install.estimatedAgeOfWiring} yrs` : '—'}</div>
+            </div>
+          </div>
+          {install?.occupier && (
+            <div className="cv-data-field">
+              <div className="cv-data-label">Occupier</div>
+              <div className="cv-data-value">{install.occupier}</div>
+            </div>
+          )}
+        </div>
+
+        {/* Section D */}
+        <div className="cv-panel p-3 space-y-2">
+          <h3 className="text-xs font-bold text-certvoice-muted uppercase tracking-wider">D — Extent & Limitations</h3>
+          <div className="cv-data-field">
+            <div className="cv-data-label">Extent Covered</div>
+            <div className="cv-data-value text-xs leading-relaxed">{extent?.extentCovered || '—'}</div>
+          </div>
+          <div className="cv-data-field">
+            <div className="cv-data-label">Agreed Limitations</div>
+            <div className="cv-data-value text-xs leading-relaxed">{extent?.agreedLimitations || '—'}</div>
+          </div>
+          {extent?.agreedWith && (
+            <div className="cv-data-field">
+              <div className="cv-data-label">Agreed With</div>
+              <div className="cv-data-value">{extent.agreedWith}</div>
+            </div>
+          )}
+          {extent?.operationalLimitations && (
+            <div className="cv-data-field">
+              <div className="cv-data-label">Operational Limitations</div>
+              <div className="cv-data-value text-xs leading-relaxed">{extent.operationalLimitations}</div>
+            </div>
+          )}
+        </div>
       </div>
     )
   }
@@ -1281,6 +1374,7 @@ export default function InspectionCapture() {
   // ============================================================
 
   const tabRenderers: Record<CaptureTab, () => JSX.Element> = {
+    details: renderDetailsTab,
     circuits: renderCircuitsTab,
     observations: renderObservationsTab,
     supply: renderSupplyTab,
@@ -1444,7 +1538,7 @@ export default function InspectionCapture() {
                 }`}
               >
                 <TabIcon className="w-3.5 h-3.5" />
-                <span>{tab.label}</span>
+                <span className="text-[10px] sm:text-xs">{tab.label}</span>
                 {tab.count !== undefined && tab.count > 0 && (
                   <span
                     className={`text-[9px] min-w-[16px] h-4 rounded-full flex items-center justify-center ${
