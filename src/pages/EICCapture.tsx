@@ -637,8 +637,11 @@ export default function EICCapture() {
     }
   }, [pdfReady, reportNumber, installationDetails.installationAddress])
 
+  const [showSaved, setShowSaved] = useState(false)
   const handleSave = useCallback(() => {
     persistCert(certData)
+    setShowSaved(true)
+    setTimeout(() => setShowSaved(false), 2000)
   }, [certData, persistCert])
 
   // ============================================================
@@ -1207,9 +1210,13 @@ export default function EICCapture() {
               </button>
             )}
             <button type="button" onClick={handleSave}
-              className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border border-certvoice-border text-certvoice-muted hover:text-certvoice-green hover:border-certvoice-green transition-colors">
-              <Save className="w-3.5 h-3.5" />
-              <span className="text-[8px] font-semibold">Save</span>
+              className={`flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border transition-colors ${
+                showSaved
+                  ? 'border-certvoice-green text-certvoice-green'
+                  : 'border-certvoice-border text-certvoice-muted hover:text-certvoice-green hover:border-certvoice-green'
+              }`}>
+              {showSaved ? <Check className="w-3.5 h-3.5" /> : <Save className="w-3.5 h-3.5" />}
+              <span className="text-[8px] font-semibold">{showSaved ? 'Saved' : 'Save'}</span>
             </button>
             {certId && (
               <Link to={`/export/niceic/eic/${certId}`}
