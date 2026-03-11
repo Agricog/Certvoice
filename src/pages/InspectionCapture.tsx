@@ -12,7 +12,6 @@
  *
  * @module pages/InspectionCapture
  */
-
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useLocation, useParams, useNavigate, Link } from 'react-router-dom'
 import { useApiToken } from '../hooks/useApiToken'
@@ -243,24 +242,19 @@ export default function InspectionCapture() {
       try {
         // Case 1: Existing certificate ID in URL — load it
         if (certIdFromUrl) {
-          // Try API first (freshest data)
           let loaded: Partial<EICRCertificate> | null = null
-
           try {
             loaded = await getFromApi(getToken, certIdFromUrl)
           } catch {
-            // API failed — try IndexedDB
             const local = await getFromLocal(certIdFromUrl)
             if (local) loaded = local.data
           }
 
           if (loaded) {
-            // Merge with local data so we don't lose offline circuits/observations
             try {
               const local = await getFromLocal(certIdFromUrl!)
               if (local?.data) {
                 const localData = local.data
-                // Keep local circuits/observations if API has none
                 if (!loaded.circuits?.length && localData.circuits?.length) {
                   loaded.circuits = localData.circuits
                 }
@@ -280,10 +274,16 @@ export default function InspectionCapture() {
             } catch {
               // Local read failed — continue with API data only
             }
-            // Ensure boards exist
+
             if (!loaded.distributionBoards?.length) {
               loaded.distributionBoards = DEFAULT_BOARDS
             }
+
+            // Ensure certificateType is set
+            if (!loaded.certificateType) {
+              loaded.certificateType = 'EICR'
+            }
+
             setCertificate(loaded)
             await saveToLocal(certIdFromUrl!, loaded, false)
             setPageState('ready')
@@ -293,7 +293,6 @@ export default function InspectionCapture() {
 
         // Case 2: New certificate passed via navigation state
         if (stateCert) {
-          // Create on API
           try {
             const created = await createCertificate(getToken, {
               certificateType: 'EICR',
@@ -310,6 +309,7 @@ export default function InspectionCapture() {
             const newCert: Partial<EICRCertificate> = {
               ...stateCert,
               id: created.id,
+              certificateType: 'EICR',
               reportNumber: created.reportNumber,
               status: created.status as EICRCertificate['status'],
               distributionBoards: stateCert.distributionBoards?.length
@@ -324,17 +324,15 @@ export default function InspectionCapture() {
 
             setCertificate(newCert)
             await saveToLocal(created.id, newCert, false)
-
-            // Update URL to include the new ID
             navigate(`/inspect/${created.id}`, { replace: true })
             setPageState('ready')
             return
           } catch (err) {
-            // API failed — create locally with temp ID
             const tempId = stateCert.id ?? crypto.randomUUID()
             const localCert: Partial<EICRCertificate> = {
               ...stateCert,
               id: tempId,
+              certificateType: 'EICR',
               reportNumber: stateCert.reportNumber ?? `CV-${Date.now().toString(36).toUpperCase()}`,
               status: 'DRAFT' as const,
               distributionBoards: stateCert.distributionBoards?.length
@@ -356,7 +354,7 @@ export default function InspectionCapture() {
           }
         }
 
-        // Case 3: No ID and no state — shouldn't happen, redirect
+        // Case 3: No ID and no state — redirect
         navigate('/', { replace: true })
       } catch (err) {
         captureError(err, 'InspectionCapture.loadOrCreate')
@@ -378,7 +376,6 @@ export default function InspectionCapture() {
     syncServiceRef.current = service
     setSyncReady(true)
     service.start()
-
     return () => {
       service.stop()
       syncServiceRef.current = null
@@ -454,7 +451,7 @@ export default function InspectionCapture() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageState, certificate.id])
 
-  // --- Validation warnings (must be after derived state) ---
+  // --- Validation warnings ---
   const validationWarnings = useMemo(() => {
     const w: string[] = []
     if (!circuits.length) w.push('No circuits recorded')
@@ -481,7 +478,6 @@ export default function InspectionCapture() {
     (circuit: Partial<CircuitDetail>) => {
       try {
         const captureMethod = recorderMode ?? 'voice'
-
         setCertificate((prev) => {
           const existing = [...(prev.circuits ?? [])]
           if (editingCircuitIndex !== null) {
@@ -530,7 +526,6 @@ export default function InspectionCapture() {
             existing.push(newCircuit)
           }
           const updated = { ...prev, circuits: existing, updatedAt: new Date().toISOString() }
-          // Persist async (fire-and-forget)
           persistCertificate(updated)
           return updated
         })
@@ -568,7 +563,6 @@ export default function InspectionCapture() {
         setCertificate((prev) => {
           const existing = [...(prev.circuits ?? [])]
           const dbRef = activeBoard?.dbReference ?? 'DB1'
-
           const newCircuits: CircuitDetail[] = scannedCircuits.map((sc) => ({
             id: crypto.randomUUID(),
             dbId: dbRef,
@@ -607,19 +601,14 @@ export default function InspectionCapture() {
             status: 'INCOMPLETE' as const,
             validationWarnings: [],
           }))
-
           const allCircuits = [...existing, ...newCircuits]
           const cert = { ...prev, circuits: allCircuits, updatedAt: new Date().toISOString() }
           persistCertificate(cert)
           return cert
         })
-
-        // Track each scanned circuit
         scannedCircuits.forEach(() => {
           trackCircuitCaptured('UNKNOWN', 'manual')
         })
-
-        // Reset scan state
         setShowBoardScan(false)
         setBoardScanResult(null)
       } catch (error) {
@@ -683,7 +672,6 @@ export default function InspectionCapture() {
     setCertificate((prev) => {
       const existing = [...(prev.observations ?? [])]
       existing.splice(idx, 1)
-      // Re-number remaining observations
       const renumbered = existing.map((o, i) => ({ ...o, itemNumber: i + 1 }))
       const cert = { ...prev, observations: renumbered, updatedAt: new Date().toISOString() }
       persistCertificate(cert)
@@ -807,8 +795,6 @@ export default function InspectionCapture() {
         if (!board) return prev
         const oldRef = board.dbReference
         existing[editingBoardIndex] = updated
-
-        // If dbReference changed, update all circuits and observations referencing the old ref
         if (oldRef !== updated.dbReference) {
           const updatedCircuits = (prev.circuits ?? []).map((c) =>
             c.dbId === oldRef ? { ...c, dbId: updated.dbReference } : c
@@ -853,7 +839,7 @@ export default function InspectionCapture() {
   const TABS: { id: CaptureTab; label: string; icon: typeof Zap; count?: number }[] = [
     { id: 'details', label: 'Details', icon: FileText },
     { id: 'circuits', label: 'Circuits', icon: CircuitBoard, count: circuits.length },
-    { id: 'observations', label: 'Observations', icon: AlertTriangle, count: observations.length },
+    { id: 'observations', label: 'Obs', icon: AlertTriangle, count: observations.length },
     { id: 'supply', label: 'Supply', icon: Settings2 },
     { id: 'checklist', label: 'Checklist', icon: ClipboardList },
     { id: 'declaration', label: 'Sign', icon: FileSignature },
@@ -885,6 +871,7 @@ export default function InspectionCapture() {
   // ============================================================
   // RENDER: DETAILS TAB (Sections A-D)
   // ============================================================
+
   const renderDetailsTab = () => {
     const client = certificate.clientDetails
     const reason = certificate.reportReason
@@ -893,7 +880,6 @@ export default function InspectionCapture() {
 
     return (
       <div className="space-y-3">
-        {/* Section A */}
         <div className="cv-panel p-3 space-y-2">
           <h3 className="text-xs font-bold text-certvoice-muted uppercase tracking-wider">A — Client</h3>
           <div className="cv-data-field">
@@ -906,7 +892,6 @@ export default function InspectionCapture() {
           </div>
         </div>
 
-        {/* Section B */}
         <div className="cv-panel p-3 space-y-2">
           <h3 className="text-xs font-bold text-certvoice-muted uppercase tracking-wider">B — Reason</h3>
           <div className="grid grid-cols-2 gap-2">
@@ -921,7 +906,6 @@ export default function InspectionCapture() {
           </div>
         </div>
 
-        {/* Section C */}
         <div className="cv-panel p-3 space-y-2">
           <h3 className="text-xs font-bold text-certvoice-muted uppercase tracking-wider">C — Installation</h3>
           <div className="cv-data-field">
@@ -946,7 +930,6 @@ export default function InspectionCapture() {
           )}
         </div>
 
-        {/* Section D */}
         <div className="cv-panel p-3 space-y-2">
           <h3 className="text-xs font-bold text-certvoice-muted uppercase tracking-wider">D — Extent & Limitations</h3>
           <div className="cv-data-field">
@@ -980,7 +963,6 @@ export default function InspectionCapture() {
 
   const renderCircuitsTab = () => (
     <div className="space-y-3">
-      {/* Board selector */}
       <div className="flex items-center gap-2">
         <div className="flex-1 flex gap-1 overflow-x-auto">
           {boards.map((board, idx) => (
@@ -1008,7 +990,6 @@ export default function InspectionCapture() {
         </button>
       </div>
 
-      {/* Board info (tap to edit) */}
       {activeBoard && editingBoardIndex === null && (
         <button
           type="button"
@@ -1023,7 +1004,6 @@ export default function InspectionCapture() {
         </button>
       )}
 
-      {/* Board editor (inline) */}
       {activeBoard && editingBoardIndex === activeDbIndex && (
         <BoardEditor
           board={activeBoard}
@@ -1032,7 +1012,6 @@ export default function InspectionCapture() {
         />
       )}
 
-      {/* Circuit list */}
       {boardCircuits.length === 0 ? (
         <div className="cv-panel text-center py-8">
           <CircuitBoard className="w-6 h-6 text-certvoice-muted/40 mx-auto mb-2" />
@@ -1043,9 +1022,7 @@ export default function InspectionCapture() {
         </div>
       ) : (
         boardCircuits.map((circuit, idx) => {
-          const globalIdx = circuits.findIndex(
-            (c) => c.id === circuit.id
-          )
+          const globalIdx = circuits.findIndex((c) => c.id === circuit.id)
           const isPass = circuit.status === 'SATISFACTORY'
           return (
             <div key={circuit.id ?? `${circuit.circuitNumber}-${idx}`} className="space-y-1">
@@ -1119,7 +1096,6 @@ export default function InspectionCapture() {
         })
       )}
 
-      {/* Add circuit buttons — voice + manual + scan */}
       <div className="flex gap-2">
         <button
           type="button"
@@ -1161,7 +1137,6 @@ export default function InspectionCapture() {
         </button>
       </div>
 
-      {/* Circuit Recorder — voice or manual mode */}
       {recorderMode && (
         <CircuitRecorder
           mode={recorderMode}
@@ -1178,7 +1153,6 @@ export default function InspectionCapture() {
         />
       )}
 
-      {/* Board Scan — capture phase */}
       {showBoardScan && !boardScanResult && (
         <BoardScanCapture
           getToken={getToken}
@@ -1187,7 +1161,6 @@ export default function InspectionCapture() {
         />
       )}
 
-      {/* Board Scan — review phase */}
       {showBoardScan && boardScanResult && (
         <BoardScanReview
           boardReference={boardScanResult.boardReference || activeBoard?.dbReference || 'DB1'}
@@ -1347,7 +1320,7 @@ export default function InspectionCapture() {
   )
 
   // ============================================================
-  // RENDER: DECLARATION TAB (Test Instruments + Declaration)
+  // RENDER: DECLARATION TAB
   // ============================================================
 
   const renderDeclarationTab = () => (
@@ -1391,14 +1364,15 @@ export default function InspectionCapture() {
         <meta name="description" content="EICR inspection capture" />
       </Helmet>
 
-      <div className="max-w-lg mx-auto px-4 py-4 space-y-4">
-        {/* ---- Header ---- */}
+      <div className="max-w-lg mx-auto px-4 py-4 space-y-3">
+
+        {/* ---- Header Row 1: Back + Title + Sync ---- */}
         <div className="flex items-center gap-3">
           <Link
             to="/dashboard"
             onClick={() => persistCertificate(certificate)}
             className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
-                       text-certvoice-muted hover:text-certvoice-text hover:border-certvoice-muted transition-colors"
+                       text-certvoice-muted hover:text-certvoice-text hover:border-certvoice-muted transition-colors shrink-0"
             title="Back to dashboard"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -1409,11 +1383,9 @@ export default function InspectionCapture() {
               {address}
             </h1>
             <p className="text-[10px] text-certvoice-muted flex items-center gap-1.5">
-              {certificate.certificateType && (
-                <span className="bg-certvoice-accent/15 text-certvoice-accent font-bold px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide">
-                  {certificate.certificateType}
-                </span>
-              )}
+              <span className="bg-certvoice-accent/15 text-certvoice-accent font-bold px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide">
+                {certificate.certificateType ?? 'EICR'}
+              </span>
               {certificate.reportNumber ?? ''} ·{' '}
               {certificate.clientDetails?.clientName ?? ''}
             </p>
@@ -1424,6 +1396,10 @@ export default function InspectionCapture() {
               onSyncNow={() => syncServiceRef.current?.syncNow()}
             />
           )}
+        </div>
+
+        {/* ---- Header Row 2: Action buttons with visible labels ---- */}
+        <div className="flex gap-1.5 flex-wrap">
           {pdfReady ? (
             <>
               <a
@@ -1433,20 +1409,20 @@ export default function InspectionCapture() {
                   URL.revokeObjectURL(pdfReady.url)
                   setPdfReady(null)
                 }, 5000)}
-                className="w-8 h-8 rounded-lg border border-certvoice-green flex items-center justify-center
-                           text-certvoice-green hover:bg-certvoice-green/10 transition-colors animate-pulse"
-                title="Download PDF"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-certvoice-green
+                           text-certvoice-green text-[10px] font-semibold hover:bg-certvoice-green/10 transition-colors animate-pulse"
               >
-                <Download className="w-4 h-4" />
+                <Download className="w-3 h-3" />
+                Download
               </a>
               <button
                 type="button"
                 onClick={handleSharePdf}
-                className="w-8 h-8 rounded-lg border border-certvoice-accent flex items-center justify-center
-                           text-certvoice-accent hover:bg-certvoice-accent/10 transition-colors"
-                title="Share PDF"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-certvoice-accent
+                           text-certvoice-accent text-[10px] font-semibold hover:bg-certvoice-accent/10 transition-colors"
               >
-                <Share2 className="w-4 h-4" />
+                <Share2 className="w-3 h-3" />
+                Share
               </button>
             </>
           ) : (
@@ -1454,43 +1430,46 @@ export default function InspectionCapture() {
               type="button"
               onClick={handleExportPdf}
               disabled={isExporting}
-              className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
-                         text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors
-                         disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Export PDF"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-certvoice-border
+                         text-certvoice-muted text-[10px] font-semibold hover:text-certvoice-accent hover:border-certvoice-accent
+                         transition-colors disabled:opacity-50"
             >
-              {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              {isExporting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+              PDF
             </button>
           )}
+
           <button
             type="button"
             onClick={handleSave}
-            className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
-                       text-certvoice-muted hover:text-certvoice-green hover:border-certvoice-green transition-colors"
-            title="Save progress"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-certvoice-border
+                       text-certvoice-muted text-[10px] font-semibold hover:text-certvoice-green hover:border-certvoice-green transition-colors"
           >
-            <Save className="w-4 h-4" />
+            <Save className="w-3 h-3" />
+            Save
           </button>
+
           {certificate.id && (
             <Link
               to={`/export/niceic/eicr/${certificate.id}`}
               onClick={() => persistCertificate(certificate)}
-              className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
-                         text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors"
-              title="Export to NICEIC"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-certvoice-border
+                         text-certvoice-muted text-[10px] font-semibold hover:text-certvoice-accent hover:border-certvoice-accent transition-colors"
             >
-              <FileOutput className="w-4 h-4" />
+              <FileOutput className="w-3 h-3" />
+              NICEIC
             </Link>
           )}
+
           {certificate.id && (
             <Link
               to={`/export/napit/eicr/${certificate.id}`}
               onClick={() => persistCertificate(certificate)}
-              className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
-                         text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors"
-              title="Notify NAPIT"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-certvoice-border
+                         text-certvoice-muted text-[10px] font-semibold hover:text-certvoice-accent hover:border-certvoice-accent transition-colors"
             >
-              <FileText className="w-4 h-4" />
+              <FileText className="w-3 h-3" />
+              NAPIT
             </Link>
           )}
         </div>
@@ -1523,7 +1502,7 @@ export default function InspectionCapture() {
         )}
 
         {/* ---- Tabs ---- */}
-        <div className="flex gap-1 bg-certvoice-surface border border-certvoice-border rounded-lg p-1">
+        <div className="flex gap-0.5 bg-certvoice-surface border border-certvoice-border rounded-lg p-1 overflow-x-auto">
           {TABS.map((tab) => {
             const TabIcon = tab.icon
             return (
@@ -1531,17 +1510,17 @@ export default function InspectionCapture() {
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-md text-xs font-semibold transition-colors ${
+                className={`flex items-center justify-center gap-1 px-2 py-2 rounded-md text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
                   activeTab === tab.id
                     ? 'bg-certvoice-accent text-white'
                     : 'text-certvoice-muted hover:text-certvoice-text'
                 }`}
               >
-                <TabIcon className="w-3.5 h-3.5" />
-                <span className="text-[10px] sm:text-xs">{tab.label}</span>
+                <TabIcon className="w-3 h-3" />
+                {tab.label}
                 {tab.count !== undefined && tab.count > 0 && (
                   <span
-                    className={`text-[9px] min-w-[16px] h-4 rounded-full flex items-center justify-center ${
+                    className={`text-[9px] min-w-[14px] h-3.5 rounded-full flex items-center justify-center ${
                       activeTab === tab.id
                         ? 'bg-white/20 text-white'
                         : 'bg-certvoice-surface-2 text-certvoice-muted'
