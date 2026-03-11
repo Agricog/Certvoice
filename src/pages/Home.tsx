@@ -126,16 +126,28 @@ export default function Home() {
   const loadCertificates = async () => {
     setLoading(true)
     try {
+      let localItems: Partial<EICRCertificate>[] = []
+      try {
+        const { listLocalCertificates } = await import('../services/offlineStore')
+        const localCerts = await listLocalCertificates()
+        localItems = localCerts.map((stored) => stored.data as Partial<EICRCertificate>)
+      } catch {
+        // IndexedDB failed — continue
+      }
+      if (localItems.length > 0) {
+        setCertificates(localItems)
+        setLoading(false)
+      }
       const { data, error } = await api.get<Partial<EICRCertificate>[]>(
         '/api/certificates',
         { limit: '20' }
       )
-
       if (data && !error) {
         const certs = Array.isArray(data) ? data : (data as { data?: Partial<EICRCertificate>[] }).data ?? []
-        setCertificates(certs)
-      } else {
-        // API not available yet — show empty state, no error displayed
+        const apiIds = new Set(certs.map((c) => c.id))
+        const localOnly = localItems.filter((c) => !apiIds.has(c.id))
+        setCertificates([...certs, ...localOnly])
+      } else if (localItems.length === 0) {
         setCertificates([])
       }
     } catch (err) {
