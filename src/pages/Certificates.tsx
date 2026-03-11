@@ -152,7 +152,7 @@ function mapCertToListItem(cert: Partial<EICRCertificate>, isLocal = false): Cer
     id: cert.id ?? '',
     reportNumber: cert.reportNumber ?? '',
     status: cert.status ?? 'DRAFT',
-    certificateType: 'EICR',
+    certificateType: (raw.certificateType as CertificateType) ?? 'EICR',
     clientName: cert.clientDetails?.clientName ?? 'No client',
     installationAddress: cert.installationDetails?.installationAddress ?? 'No address',
     inspectionDate: cert.reportReason?.inspectionDates?.[0] ?? null,
