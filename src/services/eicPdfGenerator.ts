@@ -104,6 +104,7 @@ interface AllSignatures {
 /** Replace non-WinAnsi characters with ASCII equivalents */
 function sanitize(text: string): string {
   return text
+    .replace(/[\r\n]+/g, ', ')
     .replace(/≤/g, '<=')
     .replace(/≥/g, '>=')
     .replace(/±/g, '+/-')
