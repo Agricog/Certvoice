@@ -29,6 +29,7 @@ import {
   Zap,
   CircuitBoard,
   AlertTriangle,
+  Check,
   Settings2,
   ClipboardList,
   Plus,
