@@ -1260,7 +1260,7 @@ export default function EICCapture() {
                 }`}
               >
                 <TabIcon className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">{tab.label}</span>
+                <span className="text-[10px] sm:text-xs">{tab.label}</span>
                 {tab.count !== undefined && tab.count > 0 && (
                   <span className={`text-[9px] min-w-[16px] h-4 rounded-full flex items-center justify-center ${
                     activeTab === tab.id ? 'bg-white/20 text-white' : 'bg-certvoice-surface-2 text-certvoice-muted'
