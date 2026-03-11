@@ -719,8 +719,7 @@ export default function NapitExport() {
 
         {/* ── Footer CTA ── */}
         <div className="pt-2 pb-10 text-center space-y-3">
-          <a
-            {readyToNotify ? (
+          {readyToNotify ? (
             
               href="https://www.napitonline.com"
               target="_blank"
@@ -740,13 +739,12 @@ export default function NapitExport() {
               Complete required fields first
             </Link>
           )}
-
           <div className="space-y-1">
             <p className="text-[10px] text-certvoice-muted">
               CertVoice does not submit to NAPIT on your behalf. You remain in full control of the submission.
             </p>
             <Link
-              to={id ? `/inspect/${id}` : '/dashboard'}
+              to={id ? `/eic/${id}` : '/dashboard'}
               className="text-xs text-certvoice-accent hover:underline underline-offset-2"
             >
               Back to certificate
