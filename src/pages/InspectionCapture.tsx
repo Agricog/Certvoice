@@ -1444,7 +1444,7 @@ export default function InspectionCapture() {
                 }`}
               >
                 <TabIcon className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">{tab.label}</span>
+                <span>{tab.label}</span>
                 {tab.count !== undefined && tab.count > 0 && (
                   <span
                     className={`text-[9px] min-w-[16px] h-4 rounded-full flex items-center justify-center ${
