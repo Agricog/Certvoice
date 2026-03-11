@@ -218,7 +218,7 @@ export default function Home() {
               CertVoice
             </h1>
             <p className="text-xs text-certvoice-muted mt-0.5">
-              Voice-first EICR certificates
+              Voice-first electrical certificates
             </p>
           </div>
           <Link
@@ -226,7 +226,7 @@ export default function Home() {
             className="cv-btn-primary flex items-center gap-2 px-4 py-2.5 text-sm"
           >
             <Plus className="w-4 h-4" />
-            New EICR
+            New Certificate
           </Link>
         </div>
 
