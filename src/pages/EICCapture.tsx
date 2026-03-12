@@ -1164,13 +1164,13 @@ export default function EICCapture() {
       </Helmet>
 
       <div className="max-w-lg mx-auto px-4 py-4 space-y-4">
-        {/* Header */}
+        {/* ---- Header Row 1: Back + Title + Sync ---- */}
         <div className="flex items-center gap-3">
           <Link
             to="/dashboard"
             onClick={() => persistCert(certData)}
             className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
-                       text-certvoice-muted hover:text-certvoice-text hover:border-certvoice-muted transition-colors"
+                       text-certvoice-muted hover:text-certvoice-text hover:border-certvoice-muted transition-colors shrink-0"
             title="Back to dashboard"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -1190,53 +1190,57 @@ export default function EICCapture() {
               onSyncNow={() => syncServiceRef.current?.syncNow()}
             />
           )}
-         <div className="flex items-center gap-1">
-            {pdfReady ? (
-              <>
-                <a href={pdfReady.url} download={pdfReady.filename}
-                  className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border border-certvoice-green text-certvoice-green hover:bg-certvoice-green/10 transition-colors animate-pulse">
-                  <Download className="w-3.5 h-3.5" />
-                  <span className="text-[8px] font-semibold">PDF</span>
-                </a>
-                <button type="button" onClick={handleSharePdf}
-                  className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border border-certvoice-accent text-certvoice-accent hover:bg-certvoice-accent/10 transition-colors">
-                  <Share2 className="w-3.5 h-3.5" />
-                  <span className="text-[8px] font-semibold">Share</span>
-                </button>
-              </>
-            ) : (
-              <button type="button" onClick={handleExportPdf} disabled={isExporting}
-                className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border border-certvoice-border text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors disabled:opacity-50">
-                {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                <span className="text-[8px] font-semibold">PDF</span>
+        </div>
+
+        {/* ---- Header Row 2: Action buttons ---- */}
+        <div className="flex gap-1.5 flex-wrap">
+          {pdfReady ? (
+            <>
+              <a href={pdfReady.url} download={pdfReady.filename}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-certvoice-green
+                           text-certvoice-green text-[10px] font-semibold hover:bg-certvoice-green/10 transition-colors animate-pulse">
+                <Download className="w-3 h-3" /> Download
+              </a>
+              <button type="button" onClick={handleSharePdf}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-certvoice-accent
+                           text-certvoice-accent text-[10px] font-semibold hover:bg-certvoice-accent/10 transition-colors">
+                <Share2 className="w-3 h-3" /> Share
               </button>
-            )}
-            <button type="button" onClick={handleSave}
-              className={`flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border transition-colors ${
-                showSaved
-                  ? 'border-certvoice-green text-certvoice-green'
-                  : 'border-certvoice-border text-certvoice-muted hover:text-certvoice-green hover:border-certvoice-green'
-              }`}>
-              {showSaved ? <Check className="w-3.5 h-3.5" /> : <Save className="w-3.5 h-3.5" />}
-              <span className="text-[8px] font-semibold">{showSaved ? 'Saved' : 'Save'}</span>
+            </>
+          ) : (
+            <button type="button" onClick={handleExportPdf} disabled={isExporting}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-certvoice-border
+                         text-certvoice-muted text-[10px] font-semibold hover:text-certvoice-accent hover:border-certvoice-accent
+                         transition-colors disabled:opacity-50">
+              {isExporting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+              PDF
             </button>
-            {certId && (
-              <Link to={`/export/niceic/eic/${certId}`}
-                onClick={() => persistCert(certData)}
-                className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border border-certvoice-border text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors">
-                <FileOutput className="w-3.5 h-3.5" />
-                <span className="text-[8px] font-semibold">NICEIC</span>
-              </Link>
-            )}
-            {certId && (
-              <Link to={`/export/napit/eic/${certId}`}
-                onClick={() => persistCert(certData)}
-                className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border border-certvoice-border text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors">
-                <FileText className="w-3.5 h-3.5" />
-                <span className="text-[8px] font-semibold">NAPIT</span>
-              </Link>
-            )}
-          </div>
+          )}
+          <button type="button" onClick={handleSave}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] font-semibold transition-colors ${
+              showSaved
+                ? 'border-certvoice-green text-certvoice-green'
+                : 'border-certvoice-border text-certvoice-muted hover:text-certvoice-green hover:border-certvoice-green'
+            }`}>
+            {showSaved ? <Check className="w-3 h-3" /> : <Save className="w-3 h-3" />}
+            {showSaved ? 'Saved' : 'Save'}
+          </button>
+          {certId && (
+            <Link to={`/export/niceic/eic/${certId}`}
+              onClick={() => persistCert(certData)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-certvoice-border
+                         text-certvoice-muted text-[10px] font-semibold hover:text-certvoice-accent hover:border-certvoice-accent transition-colors">
+              <FileOutput className="w-3 h-3" /> NICEIC
+            </Link>
+          )}
+          {certId && (
+            <Link to={`/export/napit/eic/${certId}`}
+              onClick={() => persistCert(certData)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-certvoice-border
+                         text-certvoice-muted text-[10px] font-semibold hover:text-certvoice-accent hover:border-certvoice-accent transition-colors">
+              <FileText className="w-3 h-3" /> NAPIT
+            </Link>
+          )}
         </div>
 
         {/* Validation warnings */}
@@ -1255,7 +1259,7 @@ export default function EICCapture() {
         )}
 
         {/* Tabs */}
-        <div className="flex gap-1 bg-certvoice-surface border border-certvoice-border rounded-lg p-1">
+        <div className="flex gap-0.5 bg-certvoice-surface border border-certvoice-border rounded-lg p-1 overflow-x-auto">
           {TABS.map((tab) => {
             const TabIcon = tab.icon
             return (
@@ -1263,7 +1267,7 @@ export default function EICCapture() {
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-md text-xs font-semibold transition-colors ${
+                className={`flex items-center justify-center gap-1 px-2 py-2 rounded-md text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
                   activeTab === tab.id
                     ? 'bg-certvoice-accent text-white'
                     : 'text-certvoice-muted hover:text-certvoice-text'
