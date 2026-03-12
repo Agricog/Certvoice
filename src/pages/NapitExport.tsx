@@ -269,11 +269,16 @@ export default function NapitExport() {
         setCertificate(data)
 
         // Pre-fill editable fields from certificate data
+        // EIC stores date in extentOfWork.dateCompleted, EICR in declaration.dateInspected
+        const raw = data as unknown as Record<string, unknown>
+        const extentOfWork = raw.extentOfWork as { dateCompleted?: string } | undefined
+        const eicDescription = extentOfWork as { descriptionOfWork?: string } | undefined
+
         setNapitFields((prev) => ({
           ...prev,
           certificateSerial: data.reportNumber ?? '',
-          completionDate: data.declaration?.dateInspected ?? '',
-          workDescription: data.extentAndLimitations?.extentCovered ?? '',
+          completionDate: extentOfWork?.dateCompleted ?? data.declaration?.dateInspected ?? '',
+          workDescription: eicDescription?.descriptionOfWork ?? data.extentAndLimitations?.extentCovered ?? '',
         }))
 
         setPageState('ready')
