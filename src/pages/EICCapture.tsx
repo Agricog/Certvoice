@@ -1168,6 +1168,7 @@ export default function EICCapture() {
         <div className="flex items-center gap-3">
           <Link
             to="/dashboard"
+            onClick={() => persistCert(certData)}
             className="w-8 h-8 rounded-lg border border-certvoice-border flex items-center justify-center
                        text-certvoice-muted hover:text-certvoice-text hover:border-certvoice-muted transition-colors"
             title="Back to dashboard"
@@ -1221,6 +1222,7 @@ export default function EICCapture() {
             </button>
             {certId && (
               <Link to={`/export/niceic/eic/${certId}`}
+                onClick={() => persistCert(certData)}
                 className="flex flex-col items-center gap-0.5 px-1.5 py-1 rounded-lg border border-certvoice-border text-certvoice-muted hover:text-certvoice-accent hover:border-certvoice-accent transition-colors">
                 <FileOutput className="w-3.5 h-3.5" />
                 <span className="text-[8px] font-semibold">NICEIC</span>
