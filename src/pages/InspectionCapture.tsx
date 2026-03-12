@@ -284,6 +284,17 @@ export default function InspectionCapture() {
               loaded.certificateType = 'EICR'
             }
 
+            // Guard: redirect EIC/MW certs to their correct pages
+            const loadedType = (loaded as any).certificateType
+            if (loadedType === 'EIC') {
+              navigate(`/eic/${certIdFromUrl}`, { replace: true })
+              return
+            }
+            if (loadedType === 'MINOR_WORKS') {
+              navigate(`/minor-works/${certIdFromUrl}`, { replace: true })
+              return
+            }
+
             setCertificate(loaded)
             await saveToLocal(certIdFromUrl!, loaded, false)
             setPageState('ready')
