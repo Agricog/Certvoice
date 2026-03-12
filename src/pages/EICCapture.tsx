@@ -705,7 +705,16 @@ export default function EICCapture() {
       <div className="cv-panel p-4 space-y-3">
         <h3 className="text-sm font-bold text-certvoice-text">Installation Details</h3>
         <div>
-          <label className="block text-xs font-semibold text-certvoice-text mb-1">Installation Address</label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-xs font-semibold text-certvoice-text">Installation Address</label>
+            {clientDetails.clientAddress && clientDetails.clientAddress !== installationDetails.installationAddress && (
+              <button type="button"
+                onClick={() => updateCert({ installationDetails: { ...installationDetails, installationAddress: clientDetails.clientAddress } })}
+                className="text-[10px] text-certvoice-accent font-semibold hover:underline">
+                Same as client
+              </button>
+            )}
+          </div>
           <textarea value={installationDetails.installationAddress} onChange={(e) => updateCert({ installationDetails: { ...installationDetails, installationAddress: e.target.value } })} placeholder="Address of property where work was done" rows={2} className="cv-input resize-none" />
         </div>
         <div>
