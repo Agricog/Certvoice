@@ -1106,7 +1106,6 @@ export default function InspectionCapture() {
                       {circuit.circuitDescription ?? ''}
                     </span>
                   </div>
-                  </div>
                   <span
                     className={`text-[10px] font-bold px-2 py-0.5 rounded ${
                       isPass ? 'cv-badge-pass' : 'cv-badge-fail'
