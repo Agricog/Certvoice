@@ -312,6 +312,8 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
     finalTextRef.current = ''
     stoppedManuallyRef.current = false
 
+    let isRestarting = false
+
     const recognition = createSpeechRecognition()
     if (!recognition) {
       setError({ type: 'unsupported', message: 'Could not initialise speech recognition.' })
@@ -326,8 +328,11 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
 
     recognition.onstart = () => {
       setStatus('recording')
-      startDurationTimer()
-      acquireWakeLock()
+      if (!isRestarting) {
+        startDurationTimer()
+        acquireWakeLock()
+      }
+      isRestarting = false
     }
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
@@ -363,6 +368,16 @@ export function useVoiceCapture(): UseVoiceCaptureReturn {
     }
 
     recognition.onend = () => {
+      if (!stoppedManuallyRef.current) {
+        // Android Chrome silently cuts off on pause — restart automatically
+        try {
+          isRestarting = true
+          recognition.start()
+          return
+        } catch {
+          isRestarting = false
+        }
+      }
       stopDurationTimer()
       releaseWakeLock()
       setStatus((prev) => (prev === 'error' ? prev : 'idle'))
