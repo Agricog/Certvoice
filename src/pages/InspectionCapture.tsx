@@ -156,6 +156,10 @@ export default function InspectionCapture() {
   const [isExporting, setIsExporting] = useState(false)
   const [pdfReady, setPdfReady] = useState<{ url: string; filename: string } | null>(null)
 
+  // Drag-to-reorder state
+  const dragIndexRef = useRef<number | null>(null)
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
+
   // --- Board scan state ---
   const [showBoardScan, setShowBoardScan] = useState(false)
   const [boardScanResult, setBoardScanResult] = useState<BoardScanResult | null>(null)
@@ -559,6 +563,33 @@ export default function InspectionCapture() {
       return cert
     })
   }, [persistCertificate])
+
+  const handleReorderCircuits = useCallback((fromBoardIdx: number, toBoardIdx: number) => {
+    if (fromBoardIdx === toBoardIdx) return
+    setCertificate((prev) => {
+      const allCircuits = [...(prev.circuits ?? [])]
+      const dbRef = activeBoard?.dbReference ?? 'DB1'
+      // Get board circuit IDs in current order
+      const boardIds = allCircuits
+        .filter((c) => c.dbId === dbRef)
+        .map((c) => c.id)
+      // Reorder board IDs
+      const [moved] = boardIds.splice(fromBoardIdx, 1)
+      if (moved) boardIds.splice(toBoardIdx, 0, moved)
+      // Rebuild allCircuits: board circuits in new order, others unchanged
+      const otherCircuits = allCircuits.filter((c) => c.dbId !== dbRef)
+      const reorderedBoard = boardIds
+        .map((id) => allCircuits.find((c) => c.id === id))
+        .filter((c): c is CircuitDetail => c !== undefined)
+      const cert = {
+        ...prev,
+        circuits: [...reorderedBoard, ...otherCircuits],
+        updatedAt: new Date().toISOString(),
+      }
+      persistCertificate(cert)
+      return cert
+    })
+  }, [activeBoard, persistCertificate])
 
   // ============================================================
   // HANDLERS: BOARD SCAN
@@ -1036,7 +1067,21 @@ export default function InspectionCapture() {
           const globalIdx = circuits.findIndex((c) => c.id === circuit.id)
           const isPass = circuit.status === 'SATISFACTORY'
           return (
-            <div key={circuit.id ?? `${circuit.circuitNumber}-${idx}`} className="space-y-1">
+            <div
+              key={circuit.id ?? `${circuit.circuitNumber}-${idx}`}
+              className={`space-y-1 transition-opacity ${dragOverIndex === idx ? 'opacity-50' : 'opacity-100'}`}
+              draggable
+              onDragStart={() => { dragIndexRef.current = idx }}
+              onDragEnter={() => setDragOverIndex(idx)}
+              onDragOver={(e) => e.preventDefault()}
+              onDragEnd={() => {
+                if (dragIndexRef.current !== null && dragOverIndex !== null) {
+                  handleReorderCircuits(dragIndexRef.current, dragOverIndex)
+                }
+                dragIndexRef.current = null
+                setDragOverIndex(null)
+              }}
+            >
               <button
                 type="button"
                 onClick={() => {
@@ -1046,13 +1091,21 @@ export default function InspectionCapture() {
                 className="cv-panel w-full text-left p-3 hover:border-certvoice-accent/50 transition-colors"
               >
                 <div className="flex items-center justify-between">
-                  <div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="text-certvoice-muted/40 cursor-grab active:cursor-grabbing select-none"
+                      title="Drag to reorder"
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      ⠿
+                    </span>
                     <span className="text-sm font-semibold text-certvoice-text">
                       Cct {circuit.circuitNumber}
                     </span>
                     <span className="text-xs text-certvoice-muted ml-2">
                       {circuit.circuitDescription ?? ''}
                     </span>
+                  </div>
                   </div>
                   <span
                     className={`text-[10px] font-bold px-2 py-0.5 rounded ${
