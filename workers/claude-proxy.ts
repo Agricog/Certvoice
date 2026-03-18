@@ -346,6 +346,27 @@ const BOARD_SCAN_PROMPT = `You are CertVoice AI, a specialist in reading UK cons
 ## TASK
 Examine the image carefully and extract every circuit listed on the schedule. Board schedule labels are typically formatted as a table or grid showing circuit numbers down the left and their descriptions, protective device types, and ratings.
 
+## CRITICAL: UK CONSUMER UNIT READING DIRECTION
+
+UK consumer units are almost universally numbered from RIGHT to LEFT when viewed from the front. This means:
+- Way 1 is typically on the RIGHT side of the board
+- Way numbers increase towards the LEFT
+- The circuit schedule label on the door mirrors this layout — read it RIGHT to LEFT
+
+When extracting circuits, assign circuit numbers in the order they appear on the physical board (right to left), NOT left to right as you might read text. If the schedule shows circuits in a column, the top-to-bottom order on each side is correct, but the sides read right before left.
+
+If the label clearly shows numbers that contradict this (i.e. the label explicitly numbers left to right), follow the label exactly. Always trust explicit numbering on the label over this default assumption.
+
+## SPARE WAYS — MANDATORY
+
+You MUST include every spare or unused way as a circuit row. Spare ways are empty slots on the board with no MCB fitted, or slots marked "Spare", "S/W", blank, or with a blanking plate. Do NOT skip them. For each spare way:
+- Set circuitDescription to "Spare"
+- Set ocpdType to null
+- Set ocpdRating to null
+- Set confidence to "high" if you can confirm it is spare, "medium" if uncertain
+
+Omitting spare ways will cause the circuit count to not match the physical board. This is a compliance issue.
+
 ## WHAT TO LOOK FOR
 - Circuit numbers (1, 2, 3... or Way 1, Way 2...)
 - Circuit descriptions (Ring Final, Lighting, Cooker, Shower, Sockets, Immersion, etc.)
@@ -378,9 +399,9 @@ Respond with ONLY valid JSON, no markdown, no explanation:
   "circuits": [
     {
       "circuitNumber": "string — e.g. '1', '2'",
-      "circuitDescription": "string — e.g. 'Ring Final', 'Lighting'",
-      "ocpdType": "B|C|D or null if not visible",
-      "ocpdRating": "number in amps or null if not visible",
+      "circuitDescription": "string — e.g. 'Ring Final', 'Lighting', 'Spare'",
+      "ocpdType": "B|C|D or null if not visible or spare",
+      "ocpdRating": "number in amps or null if not visible or spare",
       "rcdType": "A|AC|B|F|S or null if not visible",
       "rcdRating": "number in mA or null if not visible",
       "cableSize": "string — e.g. '2.5mm T&E', '6mm T&E', or null if not visible",
@@ -390,17 +411,16 @@ Respond with ONLY valid JSON, no markdown, no explanation:
 }
 
 ## RULES
-- Include ALL circuits visible on the schedule, even spare/unused ways (mark as "Spare" in description)
-- Do NOT invent circuits that aren't on the label
+- Include ALL circuits visible on the schedule including every spare/unused way — no exceptions
+- Do NOT invent circuits that are not on the label
 - If a field is not visible or legible, use null — do not guess
-- Order circuits by their number as they appear on the schedule
+- Order circuits by their number as they appear on the physical board (right to left by default)
 - Common UK domestic boards have 6-16 ways
 - If the image is not a board schedule (wrong photo), return: { "boardReference": "", "circuits": [], "error": "Image does not appear to be a circuit schedule label" }`
 
 // ============================================================
 // GUARD HELPERS
 // ============================================================
-
 function generateRequestId(): string {
   const timestamp = Date.now().toString(36)
   const random = crypto.randomUUID().slice(0, 8)
