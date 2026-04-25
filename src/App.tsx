@@ -18,31 +18,40 @@
  * Auth: Clerk provider in main.tsx, routes protected via ProtectedRoute.
  * Monitoring: Sentry wraps Routes for performance tracking.
  *
+ * Performance: LandingPage is eager-loaded (it's the public LCP target).
+ * All other routes are code-split via React.lazy() so first-paint on
+ * `/` only ships the landing bundle, not the full app.
+ *
  * @module App
  */
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
 import * as Sentry from '@sentry/react'
-// --- Page imports ---
+
+// --- Eager imports (landing page + always-mounted chrome) ---
 import LandingPage from './pages/LandingPage'
-import Home from './pages/Home'
-import NewInspection from './pages/NewInspection'
-import InspectionCapture from './pages/InspectionCapture'
-import MinorWorksCapture from './pages/MinorWorksCapture'
-import EICCapture from './pages/EICCapture'
-import Certificates from './pages/Certificates'
-import Settings from './pages/Settings'
-import Subscription from './pages/Subscription'
-import AuthPage from './pages/AuthPage'
-import PrivacyPolicy from './pages/PrivacyPolicy'
-import TermsOfService from './pages/TermsOfService'
-import NiceicExport from '@/pages/NiceicExport'
-import NapitExport from '@/pages/NapitExport'
-// --- Component imports ---
 import BottomNav from './components/BottomNav'
 import ProtectedRoute from './components/ProtectedRoute'
 import HelpGuide from './components/HelpGuide'
+
+// --- Lazy-loaded routes (split into separate chunks) ---
+const Home = lazy(() => import('./pages/Home'))
+const NewInspection = lazy(() => import('./pages/NewInspection'))
+const InspectionCapture = lazy(() => import('./pages/InspectionCapture'))
+const MinorWorksCapture = lazy(() => import('./pages/MinorWorksCapture'))
+const EICCapture = lazy(() => import('./pages/EICCapture'))
+const Certificates = lazy(() => import('./pages/Certificates'))
+const Settings = lazy(() => import('./pages/Settings'))
+const Subscription = lazy(() => import('./pages/Subscription'))
+const AuthPage = lazy(() => import('./pages/AuthPage'))
+const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'))
+const TermsOfService = lazy(() => import('./pages/TermsOfService'))
+const NiceicExport = lazy(() => import('@/pages/NiceicExport'))
+const NapitExport = lazy(() => import('@/pages/NapitExport'))
+
 // --- Sentry-wrapped Routes for performance monitoring ---
 const SentryRoutes = Sentry.withSentryReactRouterV6Routing(Routes)
+
 // ============================================================
 // 404
 // ============================================================
@@ -62,6 +71,18 @@ function NotFound() {
     </div>
   )
 }
+
+// ============================================================
+// Suspense fallback — minimal, matches dark theme
+// ============================================================
+function RouteLoader() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-certvoice-bg">
+      <div className="text-certvoice-muted text-sm">Loading…</div>
+    </div>
+  )
+}
+
 // ============================================================
 // APP ROOT
 // ============================================================
@@ -70,27 +91,29 @@ export default function App() {
     <BrowserRouter>
       {/* Main content area — bottom padding clears the fixed nav */}
       <div className="pb-20">
-        <SentryRoutes>
-          {/* Public routes */}
-          <Route path="/" element={<LandingPage />} />
-          <Route path="/sign-in/*" element={<AuthPage mode="sign-in" />} />
-          <Route path="/sign-up/*" element={<AuthPage mode="sign-up" />} />
-          <Route path="/privacy" element={<PrivacyPolicy />} />
-          <Route path="/terms" element={<TermsOfService />} />
-          {/* Protected routes */}
-          <Route path="/dashboard" element={<ProtectedRoute><Home /></ProtectedRoute>} />
-          <Route path="/new" element={<ProtectedRoute><NewInspection /></ProtectedRoute>} />
-          <Route path="/inspect/:id" element={<ProtectedRoute><InspectionCapture /></ProtectedRoute>} />
-          <Route path="/minor-works/:id" element={<ProtectedRoute><MinorWorksCapture /></ProtectedRoute>} />
-          <Route path="/eic/:id" element={<ProtectedRoute><EICCapture /></ProtectedRoute>} />
-          <Route path="/certificates" element={<ProtectedRoute><Certificates /></ProtectedRoute>} />
-          <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
-          <Route path="/subscription" element={<ProtectedRoute><Subscription /></ProtectedRoute>} />
-          <Route path="/export/niceic/:certType/:id" element={<NiceicExport />} />
-          <Route path="/export/napit/:certType/:id" element={<NapitExport />} />
-          {/* 404 */}
-          <Route path="*" element={<NotFound />} />
-        </SentryRoutes>
+        <Suspense fallback={<RouteLoader />}>
+          <SentryRoutes>
+            {/* Public routes */}
+            <Route path="/" element={<LandingPage />} />
+            <Route path="/sign-in/*" element={<AuthPage mode="sign-in" />} />
+            <Route path="/sign-up/*" element={<AuthPage mode="sign-up" />} />
+            <Route path="/privacy" element={<PrivacyPolicy />} />
+            <Route path="/terms" element={<TermsOfService />} />
+            {/* Protected routes */}
+            <Route path="/dashboard" element={<ProtectedRoute><Home /></ProtectedRoute>} />
+            <Route path="/new" element={<ProtectedRoute><NewInspection /></ProtectedRoute>} />
+            <Route path="/inspect/:id" element={<ProtectedRoute><InspectionCapture /></ProtectedRoute>} />
+            <Route path="/minor-works/:id" element={<ProtectedRoute><MinorWorksCapture /></ProtectedRoute>} />
+            <Route path="/eic/:id" element={<ProtectedRoute><EICCapture /></ProtectedRoute>} />
+            <Route path="/certificates" element={<ProtectedRoute><Certificates /></ProtectedRoute>} />
+            <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+            <Route path="/subscription" element={<ProtectedRoute><Subscription /></ProtectedRoute>} />
+            <Route path="/export/niceic/:certType/:id" element={<NiceicExport />} />
+            <Route path="/export/napit/:certType/:id" element={<NapitExport />} />
+            {/* 404 */}
+            <Route path="*" element={<NotFound />} />
+          </SentryRoutes>
+        </Suspense>
       </div>
       {/* Floating help button — context-aware instructions per page */}
       <HelpGuide />
